@@ -10,7 +10,7 @@ using namespace std;
 #define FRE_PER_SLICING (1800)
 #define EXTRA_TIME (105)
 
-typedef struct Unit_{
+typedef struct Unit_ {
     int unit_id;
     int obj_id;
     int obj_offset;
@@ -22,7 +22,7 @@ typedef struct Disk_ {
     int head_pos = 1;
     int pre_tokens;
     string last_action;
-    unordered_map<int,Unit> used_units;
+    unordered_map<int, Unit> used_units;
 
     Disk_(int id, int v) : id(id), capacity(v) {}
 } Disk;
@@ -147,7 +147,7 @@ public:
         });
 
         Object obj;
-        obj.id = obj_id;
+        obj.id = id;
         obj.size = size;
         obj.tag = tag;
         obj.is_delete = false;
@@ -164,13 +164,13 @@ public:
                     start++;
                 }
                 rep.units.push_back(start);
-                Unit unit = {start,obj_id,j};
+                Unit unit = {start, id, j};
                 target_disk->used_units[start] = unit;
             }
             obj.replicas.push_back(rep);
         }
 
-        objects[obj_id] = obj;
+        objects[id] = obj;
         return true;
     }
 
@@ -218,12 +218,110 @@ public:
 
 
     vector<string> generate_disk_actions() {
-        
+        vector<string> actions;
+        // 对每个硬盘生成本时间片内的磁头动作
+        for(auto &disk : disks) {
+            int tokens = G;  // 每个磁头每个时间片最多使用G个令牌
+            string act_str = "";
+            // 根据上一个时间片的最后一次Read动作来决定本时间片首次Read的消耗
+            int last_read_cost = 0;
+            if(disk.pre_tokens > 0)
+                last_read_cost = max(16, (int)ceil(disk.pre_tokens * 0.8)); // 上个时间片最后一次read消耗
+            // 开始模拟磁头动作（只考虑"Read"和"Pass"两种动作）
+            while(tokens > 0) {
+                int pos = disk.head_pos;
+                // 判断当前位置是否有对象块
+                auto it = disk.used_units.find(pos);
+                if(it != disk.used_units.end()) {
+                    // 当前有对象块，计划执行Read动作
+                    int cost = (last_read_cost == 0) ? 64 : max(16, (int)ceil(last_read_cost * 0.8));
+                    if(tokens >= cost) {
+                        act_str.push_back('r');
+                        tokens -= cost;
+                        last_read_cost = cost;  // 更新当前Read动作的令牌消耗
+                        // 记录本次Read操作：该盘当前位置上的数据块被读取
+                        Unit u = it->second; // 该存储单元存储的对象块信息
+                        int obj_id = u.obj_id;
+                        int blk_idx = u.obj_offset;
+                        if(objects.find(obj_id) != objects.end()){
+                            Object &obj = objects[obj_id];
+                            // 将该对象块的读取记录到所有正在等待该对象的读请求中
+                            for (int req_id : obj.active_requests) {
+                                if(requests.find(req_id) != requests.end()){
+                                    requests[req_id].read_blocks[disk.id].insert(blk_idx);
+                                }
+                            }
+                        }
+                    } else {
+                        // 剩余令牌不足以进行Read，停止本盘操作
+                        break;
+                    }
+                } else {
+                    // 当前没有数据块，执行Pass动作（消耗1个令牌）
+                    if(tokens >= 1) {
+                        act_str.push_back('p');
+                        tokens -= 1;
+                        // Pass动作视为未连续Read，重置last_read_cost
+                        last_read_cost = 0;
+                    } else {
+                        break;
+                    }
+                }
+                // 更新磁头位置（环形排列）
+                disk.head_pos = (disk.head_pos % disk.capacity) + 1;
+            }
+            // 在动作串末尾添加结束符'#'
+            act_str.push_back('#');
+            // 更新磁盘状态：如果本时间片最后一个动作为Read，则记录其令牌消耗；否则置为0
+            if(act_str.size() > 1 && act_str[act_str.size()-2] == 'r')
+                disk.pre_tokens = last_read_cost;
+            else
+                disk.pre_tokens = 0;
+            actions.push_back(act_str);
+        }
+        return actions;
     }
-
+    
     vector<int> check_completed_requests() {
-        
+        vector<int> completed;
+        // 遍历所有读请求，判断其目标对象的每个对象块是否至少有一个副本被读取
+        for(auto it = requests.begin(); it != requests.end(); ) {
+            ReadRequest &req = it->second;
+            if(objects.find(req.obj_id) == objects.end()){
+                // 对象不存在的情况（一般已在删除操作中处理），直接删除该请求
+                it = requests.erase(it);
+                continue;
+            }
+            Object &obj = objects[req.obj_id];
+            bool all_read = true;
+            // 对于对象的每个块（块下标0 ~ size-1），检查是否有任一副本被读取
+            for (int blk = 0; blk < obj.size; blk++) {
+                bool blk_ok = false;
+                for(auto &rep : obj.replicas) {
+                    int disk_id = rep.disk_id;
+                    if(req.read_blocks.count(disk_id) && req.read_blocks[disk_id].count(blk)) {
+                        blk_ok = true;
+                        break;
+                    }
+                }
+                if(!blk_ok) {
+                    all_read = false;
+                    break;
+                }
+            }
+            if(all_read) {
+                completed.push_back(req.req_id);
+                // 完成的请求从对应对象的active_requests中移除
+                obj.active_requests.erase(req.req_id);
+                // 同时从全局请求中删除，确保只上报一次完成
+                it = requests.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return completed;
     }
+    
 
     void read_action(){
         // recieve input
