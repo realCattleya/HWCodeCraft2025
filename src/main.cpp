@@ -2,6 +2,7 @@
 #include <vector>      // vector容器
 #include <unordered_map> // 哈希表（unordered_map）
 #include <set>         // 集合（set）
+#include <unordered_set> // 无序集合（unordered_set）
 #include <string>      // 字符串类型
 #include <algorithm>   // 算法（sort）
 #include <cassert>     // 断言（assert）
@@ -19,6 +20,7 @@ using namespace std;
 #define REP_NUM (3)
 #define FRE_PER_SLICING (1800)
 #define EXTRA_TIME (105)
+#define MAX_TOKENS_NUM (1000)
 
 typedef struct Unit_ {
     int unit_id;
@@ -30,6 +32,7 @@ typedef struct Disk_ {
     int id;
     int capacity;
     int head_pos = 1;
+    int next_free_unit = 1;
     int pre_tokens;
     string last_action;
     unordered_map<int, Unit> used_units;
@@ -48,16 +51,19 @@ typedef struct Object_ {
     int tag;
     bool is_delete;
     vector<ObjectReplica> replicas;
-    set<int> active_requests;
+    unordered_set<int> active_requests;
 } Object;
 
-typedef struct ReadRequest_ {
+struct ReadRequest {
     int req_id;
     int obj_id;
     int start_time;
     bool isdone;
-    unordered_map<int, set<int>> read_blocks; // disk_id -> blocks
-} ReadRequest;
+    unordered_map<int, unordered_set<int>> read_blocks; // 原有记录，每个磁盘读到的块
+    vector<bool> block_read; // 新增：大小为对象块数，初始为 false
+    int unique_blocks_read = 0; // 已读到的唯一块数量
+};
+
 
 class StorageController {
 private:
@@ -69,6 +75,7 @@ private:
     vector<Disk> disks;
     unordered_map<int, Object> objects;
     unordered_map<int, ReadRequest> requests;
+    unordered_set<int> pending_completed_requests; // 新增：跟踪待完成的请求
     int current_time = 0;
     
     // pre-process data
@@ -110,9 +117,8 @@ public:
             // erase objs disk units
             for(auto& rep : it->second.replicas) {
                 Disk& disk = disks[rep.disk_id-1];
-                for(int u : rep.units){
-                    auto uit = disk.used_units.find(u);
-                    disk.used_units.erase(uit);
+                for (int u : rep.units) {
+                    disk.used_units.erase(u);
                 }
             }
 
@@ -142,16 +148,18 @@ public:
     }
 
 
-    bool write_object(int id, int size, int tag){
-        // choose candidates disks
+
+    bool write_object(int id, int size, int tag) {
+        // 预分配候选磁盘数组空间
         vector<Disk*> candidates;
-        for(auto& d : disks) {
-            if((int)d.used_units.size() + size <= V)
+        candidates.reserve(disks.size());
+        for (auto &d : disks) {
+            if (d.used_units.size() + size <= V)
                 candidates.push_back(&d);
         }
-        if(candidates.size() < REP_NUM) return false;
+        if (candidates.size() < REP_NUM) return false;
 
-        // trival stragety
+        // 按当前已用单元数量排序，选择空闲空间较多的磁盘
         sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
             return a->used_units.size() < b->used_units.size();
         });
@@ -162,25 +170,32 @@ public:
         obj.tag = tag;
         obj.is_delete = false;
 
-        // allocate units
-        for(int i=0; i<3; ++i) {
+        // 为每个副本分配单元
+        for (int i = 0; i < REP_NUM; ++i) {
             Disk* target_disk = candidates[i];
-            //first find free units
             ObjectReplica rep;
             rep.disk_id = target_disk->id;
-            int start = 1;
-            for(int j=0; j<size; ++j) {
-                while(target_disk->used_units.find(start)!=target_disk->used_units.end()){
-                    start++;
+            // 使用磁盘记录的 next_free_unit，避免每次从1开始扫描
+            int start = target_disk->next_free_unit;
+            for (int j = 0; j < size; ++j) {
+                // 从上次查找位置开始寻找空闲单元
+                while (target_disk->used_units.count(start)){
+                    ++start;
+                    if(start > target_disk->capacity) start = 1;
                 }
                 rep.units.push_back(start);
-                Unit unit = {start, id, j};
+                Unit unit = { start, id, j };
                 target_disk->used_units[start] = unit;
+                ++start;
+                if(start > target_disk->capacity) start = 1;
             }
-            obj.replicas.push_back(rep);
+            // 更新磁盘的下一个空闲单元指针
+            target_disk->next_free_unit = start;
+            obj.replicas.push_back(move(rep));
         }
 
-        objects[id] = obj;
+        // 使用 move 语义避免拷贝
+        objects[id] = move(obj);
         return true;
     }
 
@@ -216,119 +231,125 @@ public:
 
     void process_read_request(int req_id, int obj_id) {
         auto it = objects.find(obj_id);
-        if(it == objects.end()) return;
+        if (it == objects.end()) return;
         
         ReadRequest req;
         req.req_id = req_id;
         req.obj_id = obj_id;
         req.start_time = current_time;
+        // 初始化 block_read 数组，大小为对象块数（obj.size），全部置 false
+        req.block_read.assign(it->second.size, false);
+        // 初始化计数器
+        req.unique_blocks_read = 0;
+        
         requests[req_id] = req;
         it->second.active_requests.insert(req_id);
     }
+    
 
 
     vector<string> generate_disk_actions() {
         vector<string> actions;
-        // 对每个硬盘生成本时间片内的磁头动作
-        for(auto &disk : disks) {
-            int tokens = G/2;  // 每个磁头每个时间片最多使用G个令牌
-            string act_str = "";
-            // 根据上一个时间片的最后一次Read动作来决定本时间片首次Read的消耗
-            int last_read_cost = 0;
-            if(disk.pre_tokens > 0)
-                last_read_cost = max(16, (int)ceil(disk.pre_tokens * 0.8)); // 上个时间片最后一次read消耗
-            // 开始模拟磁头动作（只考虑"Read"和"Pass"两种动作）
-            while(tokens > 0) {
+        actions.reserve(disks.size());
+        for (auto &disk : disks) {
+            
+            int tokens = G;  // 每个磁头每个时间片最多使用 G/2 个令牌
+            string act_str;
+            act_str.reserve(64); // 预估动作串长度，减少扩容
+            // 如果上一个时间片有 read 动作，则根据其令牌消耗计算首次 read 消耗
+            int last_read_cost = (disk.pre_tokens > 0) ? disk.pre_tokens : 0;
+            
+            while (tokens > 0) {
                 int pos = disk.head_pos;
-                // 判断当前位置是否有对象块
                 auto it = disk.used_units.find(pos);
-                if(it != disk.used_units.end()) {
-                    // 当前有对象块，计划执行Read动作
-                    int cost = (last_read_cost == 0) ? 64 : max(16, (int)ceil(last_read_cost * 0.8));
-                    if(tokens >= cost) {
+                if (it != disk.used_units.end()) {
+                    // 当前有对象块，计划执行 Read 操作
+                    int cost = (last_read_cost == 0) ? 64 : max(16, int(ceil(float(last_read_cost) * 0.8) ));
+                    if (tokens >= cost) {
                         act_str.push_back('r');
                         tokens -= cost;
-                        last_read_cost = cost;  // 更新当前Read动作的令牌消耗
-                        // 记录本次Read操作：该盘当前位置上的数据块被读取
-                        Unit u = it->second; // 该存储单元存储的对象块信息
+                        last_read_cost = cost;  // 更新当前 Read 消耗
+                        
+                        Unit u = it->second; // 当前读取的单元
                         int obj_id = u.obj_id;
                         int blk_idx = u.obj_offset;
-                        if(objects.find(obj_id) != objects.end()){
-                            Object &obj = objects[obj_id];
-                            // 将该对象块的读取记录到所有正在等待该对象的读请求中
+                        auto obj_it = objects.find(obj_id);
+                        if (obj_it != objects.end()) {
+                            Object &obj = obj_it->second;
+                            // 遍历所有活跃该对象的读请求，更新增量计数器
                             for (int req_id : obj.active_requests) {
-                                if(requests.find(req_id) != requests.end()){
-                                    requests[req_id].read_blocks[disk.id].insert(blk_idx);
+                                auto req_it = requests.find(req_id);
+                                if (req_it != requests.end()){
+                                    ReadRequest &req = req_it->second;
+                                    // 如果该块第一次被读到，则更新计数器
+                                    if (!req.block_read[blk_idx]) {
+                                        req.block_read[blk_idx] = true;
+                                        req.unique_blocks_read++;
+                                    }
+                                    // 检查是否完成
+                                    auto obj_it = objects.find(req.obj_id);
+                                    if (obj_it != objects.end()) {
+                                        Object& obj = obj_it->second;
+                                        if (req.unique_blocks_read >= obj.size) {
+                                            pending_completed_requests.insert(req.req_id);
+                                        }
+                                    }
+                                    // 仍然保留原有 read_blocks 记录（如果有其他用途）
+                                    req.read_blocks[disk.id].insert(blk_idx);
                                 }
                             }
                         }
                     } else {
-                        // 剩余令牌不足以进行Read，停止本盘操作
                         break;
                     }
                 } else {
-                    // 当前没有数据块，执行Pass动作（消耗1个令牌）
-                    if(tokens >= 1) {
+                    // 没有对象块则执行 Pass 动作，消耗 1 个令牌
+                    if (tokens >= 1) {
                         act_str.push_back('p');
                         tokens -= 1;
-                        // Pass动作视为未连续Read，重置last_read_cost
-                        last_read_cost = 0;
+                        last_read_cost = 0;  // 重置连续 Read 消耗记录
                     } else {
                         break;
                     }
                 }
                 // 更新磁头位置（环形排列）
-                disk.head_pos = (disk.head_pos % disk.capacity) + 1;
+                disk.head_pos++;
+                if(disk.head_pos>disk.capacity) disk.head_pos = 1;
             }
-            // 在动作串末尾添加结束符'#'
             act_str.push_back('#');
-            // 更新磁盘状态：如果本时间片最后一个动作为Read，则记录其令牌消耗；否则置为0
-            if(act_str.size() > 1 && act_str[act_str.size()-2] == 'r')
+            // 如果本时间片最后一个动作为 Read，则记录其令牌消耗；否则置 0
+            if (act_str.size() > 1 && act_str[act_str.size()-2] == 'r')
                 disk.pre_tokens = last_read_cost;
             else
                 disk.pre_tokens = 0;
-            actions.push_back(act_str);
+            actions.push_back(move(act_str));
         }
         return actions;
     }
     
+    
     vector<int> check_completed_requests() {
         vector<int> completed;
-        // 遍历所有读请求，判断其目标对象的每个对象块是否至少有一个副本被读取
-        for(auto it = requests.begin(); it != requests.end(); ) {
-            ReadRequest &req = it->second;
-            if(objects.find(req.obj_id) == objects.end()){
-                // 对象不存在的情况（一般已在删除操作中处理），直接删除该请求
-                it = requests.erase(it);
-                continue;
-            }
-            Object &obj = objects[req.obj_id];
-            bool all_read = true;
-            // 对于对象的每个块（块下标0 ~ size-1），检查是否有任一副本被读取
-            for (int blk = 0; blk < obj.size; blk++) {
-                bool blk_ok = false;
-                for(auto &rep : obj.replicas) {
-                    int disk_id = rep.disk_id;
-                    if(req.read_blocks.count(disk_id) && req.read_blocks[disk_id].count(blk)) {
-                        blk_ok = true;
-                        break;
-                    }
-                }
-                if(!blk_ok) {
-                    all_read = false;
-                    break;
-                }
-            }
-            if(all_read) {
-                completed.push_back(req.req_id);
-                // 完成的请求从对应对象的active_requests中移除
-                obj.active_requests.erase(req.req_id);
-                // 同时从全局请求中删除，确保只上报一次完成
-                it = requests.erase(it);
+        for (int req_id : pending_completed_requests) {
+            auto req_it = requests.find(req_id);
+            if (req_it == requests.end()) continue; // 请求已被处理或取消
+
+            ReadRequest& req = req_it->second;
+            auto obj_it = objects.find(req.obj_id);
+            if (obj_it == objects.end()) {
+                // 对象已删除，标记为完成
+                completed.push_back(req_id);
+                requests.erase(req_id);
             } else {
-                ++it;
+                Object& obj = obj_it->second;
+                if (req.unique_blocks_read >= obj.size) {
+                    completed.push_back(req_id);
+                    obj.active_requests.erase(req_id);
+                    requests.erase(req_id);
+                }
             }
         }
+        pending_completed_requests.clear();
         return completed;
     }
     
