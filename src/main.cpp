@@ -1,4 +1,14 @@
-#include<bits/stdc++.h>
+#include <iostream>    // 输入输出流（cin/cout）
+#include <vector>      // vector容器
+#include <unordered_map> // 哈希表（unordered_map）
+#include <set>         // 集合（set）
+#include <string>      // 字符串类型
+#include <algorithm>   // 算法（sort）
+#include <cassert>     // 断言（assert）
+#include <tuple>       // 元组（tuple）
+#include <cmath>       // 数学函数（ceil）
+#include <cstdlib>     // 退出函数（exit）
+#include <utility>     // 工具类（pair）
 
 using namespace std;
 
@@ -221,7 +231,7 @@ public:
         vector<string> actions;
         // 对每个硬盘生成本时间片内的磁头动作
         for(auto &disk : disks) {
-            int tokens = G;  // 每个磁头每个时间片最多使用G个令牌
+            int tokens = G/2;  // 每个磁头每个时间片最多使用G个令牌
             string act_str = "";
             // 根据上一个时间片的最后一次Read动作来决定本时间片首次Read的消耗
             int last_read_cost = 0;
@@ -354,7 +364,7 @@ int main() {
     int T, M, N, V, G;
     cin >> T >> M >> N >> V >> G;
 
-    auto read_matrix = [](int rows) {
+    auto read_matrix = [](int T, int rows) {
         vector<vector<int>> mat(rows);
         for(int i=0; i<rows; ++i) {
             int cnt = (T+FRE_PER_SLICING-1)/FRE_PER_SLICING; // ceil(T/1800)
@@ -365,9 +375,9 @@ int main() {
         return mat;
     };
 
-    auto fre_del = read_matrix(M);
-    auto fre_write = read_matrix(M);
-    auto fre_read = read_matrix(M);
+    auto fre_del = read_matrix(T, M);
+    auto fre_write = read_matrix(T, M);
+    auto fre_read = read_matrix(T, M);
 
     StorageController controller(T, M, N, V, G, fre_del, fre_write, fre_read);
     controller.pre_process();
