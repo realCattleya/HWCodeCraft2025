@@ -1,3 +1,6 @@
 data/*
 interactor/*
 test/*
+*.exe
+CMakeLists*
+*vscode
