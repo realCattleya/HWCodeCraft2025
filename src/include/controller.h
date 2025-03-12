@@ -38,5 +38,3 @@ class StorageController {
         std::vector<int> check_completed_requests(); 
         void read_action();
     };
-
-    void test();
