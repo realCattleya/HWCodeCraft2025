@@ -23,6 +23,8 @@ typedef struct Disk_ {
     int pre_tokens;
     string last_action;
     unordered_map<int, Unit> used_units;
+    unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
+    unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
 
     Disk_(int id, int v) : id(id), capacity(v) {}
 } Disk;
@@ -46,8 +48,16 @@ typedef struct ReadRequest_ {
     int obj_id;
     int start_time;
     bool isdone;
+<<<<<<< Updated upstream
     unordered_map<int, set<int>> read_blocks; // disk_id -> blocks
 } ReadRequest;
+=======
+    unordered_map<int, unordered_set<int>> read_blocks; // 原有记录，每个磁盘读到的块
+    vector<bool> block_read; // 每个对象块是否被读到，大小为对象块数，初始为 false
+    int unique_blocks_read = 0; // 已读到的唯一块数量
+};
+
+>>>>>>> Stashed changes
 
 class StorageController {
 private:
@@ -59,12 +69,19 @@ private:
     vector<Disk> disks;
     unordered_map<int, Object> objects;
     unordered_map<int, ReadRequest> requests;
+<<<<<<< Updated upstream
+=======
+    unordered_set<int> pending_completed_requests; // 跟踪待完成的请求
+>>>>>>> Stashed changes
     int current_time = 0;
     
     // pre-process data
     vector<vector<int>> fre_del;
     vector<vector<int>> fre_write;
     vector<vector<int>> fre_read;
+
+    // 新增：tag_hotness[ tag ] 表示该 tag 的热度
+    vector<double> tag_hotness; // 索引 1...M
 
 public:
     StorageController(int T, int M, int N, int V, int G,
@@ -75,10 +92,21 @@ public:
           fre_del(del), fre_write(write), fre_read(read) {
         for(int i=1; i<=N; ++i)
             disks.emplace_back(i, V);
+        tag_hotness.resize(M+1, 0.0);
     }
 
     void pre_process(){
-        //TODO: preprocess
+        // 对每个 tag（1~M）统计写入和读取总数
+        for (int tag = 1; tag <= M; ++tag) {
+            long long total_write = 0, total_read = 0;
+            // fre_write 和 fre_read 的下标分别为 tag-1 行
+            for (int j = 0; j < fre_write[0].size(); ++j) {
+                total_write += fre_write[tag-1][j];
+                total_read += fre_read[tag-1][j];
+            }
+            // 定义热度：读取量 / (写入量+1)
+            tag_hotness[tag] = (double)total_read / (total_write + 1);
+        }
         cout << "OK" << endl;
         cout.flush();
     }
@@ -96,22 +124,20 @@ public:
         for(int obj_id : obj_ids) {
             auto it = objects.find(obj_id);
             if(it == objects.end()) continue;
-
-            // erase objs disk units
+            // 清除该对象在各盘中占用的单元
             for(auto& rep : it->second.replicas) {
                 Disk& disk = disks[rep.disk_id-1];
                 for(int u : rep.units){
                     auto uit = disk.used_units.find(u);
                     disk.used_units.erase(uit);
                 }
+                
             }
-
-            // cancel corresponding requests
+            // 取消对应的读取请求
             for(int req_id : it->second.active_requests) {
                 aborted.push_back(req_id);
                 requests.erase(req_id);
             }
-            
             objects.erase(it);
         }
         return aborted;
@@ -126,9 +152,9 @@ public:
 
         // handle_delete
         auto aborted = handle_delete(del_objs);
-            cout << aborted.size() << endl;
-            for(int id : aborted) cout << id << endl;
-            cout.flush();
+        cout << aborted.size() << endl;
+        for(int id : aborted) cout << id << endl;
+        cout.flush();
     }
 
 
@@ -141,9 +167,29 @@ public:
         }
         if(candidates.size() < REP_NUM) return false;
 
+<<<<<<< Updated upstream
         // trival stragety
         sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
             return a->used_units.size() < b->used_units.size();
+=======
+        // 候选盘排序：同时考虑已用空间和该盘上该 tag 的连续写入长度
+        // 连续写入越长，给予的 bonus 越低，从而优先选择连续性更好的盘
+        const int BASE_BONUS = 1000;
+        const int FACTOR = 100;
+        sort(candidates.begin(), candidates.end(), [&, tag](Disk* a, Disk* b) {
+            int bonus_a = BASE_BONUS;
+            int bonus_b = BASE_BONUS;
+            if (a->tag_continuous.count(tag)) {
+                bonus_a = max(0, BASE_BONUS - FACTOR * a->tag_continuous[tag]);
+            }
+            if (b->tag_continuous.count(tag)) {
+                bonus_b = max(0, BASE_BONUS - FACTOR * b->tag_continuous[tag]);
+            }
+            // 评分 = 已用单元数 + bonus，数值越小越优
+            if (a->used_units.size() + bonus_a == b->used_units.size() + bonus_b)
+                return a->used_units.size() < b->used_units.size();
+            return (a->used_units.size() + bonus_a) < (b->used_units.size() + bonus_b);
+>>>>>>> Stashed changes
         });
 
         Object obj;
@@ -152,25 +198,82 @@ public:
         obj.tag = tag;
         obj.is_delete = false;
 
+<<<<<<< Updated upstream
         // allocate units
         for(int i=0; i<3; ++i) {
+=======
+        // 为每个副本分配空间
+        for (int i = 0; i < REP_NUM; ++i) {
+>>>>>>> Stashed changes
             Disk* target_disk = candidates[i];
             //first find free units
             ObjectReplica rep;
             rep.disk_id = target_disk->id;
+<<<<<<< Updated upstream
             int start = 1;
             for(int j=0; j<size; ++j) {
                 while(target_disk->used_units.find(start)!=target_disk->used_units.end()){
                     start++;
+=======
+            int start;
+            // 如果盘上已有该 tag 的分配记录，则尝试从预期位置开始分配
+            if (target_disk->tag_last_allocated.count(tag)) {
+                int expected = (target_disk->tag_last_allocated[tag] % target_disk->capacity) + 1;
+                start = expected;
+            } else {
+                start = target_disk->next_free_unit;
+            }
+            if (start > target_disk->capacity) start = 1;
+
+            // 记录本次分配的第一个空闲单元，用于判断是否连续
+            int first_alloc = start;
+            // 分配 size 个存储单元
+            for (int j = 0; j < size; ++j) {
+                while (target_disk->used_units.count(start)) {
+                    ++start;
+                    if (start > target_disk->capacity) start = 1;
+>>>>>>> Stashed changes
                 }
                 rep.units.push_back(start);
                 Unit unit = {start, id, j};
                 target_disk->used_units[start] = unit;
+<<<<<<< Updated upstream
             }
             obj.replicas.push_back(rep);
         }
 
         objects[id] = obj;
+=======
+                // 更新 last_allocated 在本轮内将最终更新为最后分配的单元
+                target_disk->tag_last_allocated[tag] = start;
+                ++start;
+                if (start > target_disk->capacity) start = 1;
+            }
+            // 更新 next_free_unit 为扫描结束后的 start
+            target_disk->next_free_unit = start;
+
+            // 判断本次分配是否与之前连续：
+            // 若盘上已有该 tag 的记录，期望值为 (旧值 % capacity)+1
+            if (target_disk->tag_last_allocated.count(tag)) {
+                int expected = ((target_disk->tag_last_allocated[tag] - rep.units.back() + rep.units.back()) % target_disk->capacity) + 1;
+                // 注意：这里我们用 first_alloc 和预期值比较
+                if (target_disk->tag_last_allocated[tag] != 0) { // 若已有记录
+                    int old_cont = (target_disk->tag_continuous.count(tag)) ? target_disk->tag_continuous[tag] : 0;
+                    // 如果 first_alloc 与预期相等，则认为连续
+                    if (first_alloc == ((target_disk->tag_last_allocated[tag] - size) % target_disk->capacity) + 1) {
+                        target_disk->tag_continuous[tag] = old_cont + size;
+                    } else {
+                        target_disk->tag_continuous[tag] = size;
+                    }
+                }
+            } else {
+                // 没有记录则直接设为 size
+                target_disk->tag_continuous[tag] = size;
+            }
+            obj.replicas.push_back(move(rep));
+        }
+        objects[id] = move(obj);
+>>>>>>> Stashed changes
         return true;
     }
 
@@ -219,6 +322,7 @@ public:
 
     vector<string> generate_disk_actions() {
         vector<string> actions;
+<<<<<<< Updated upstream
         // 对每个硬盘生成本时间片内的磁头动作
         for(auto &disk : disks) {
             int tokens = G;  // 每个磁头每个时间片最多使用G个令牌
@@ -278,6 +382,109 @@ public:
             else
                 disk.pre_tokens = 0;
             actions.push_back(act_str);
+=======
+        actions.reserve(disks.size());
+        for (auto &disk : disks) {
+            string act_str;
+            // 预设令牌数
+            int tokens = G;
+            act_str.reserve(64);
+
+            // 判断是否采用 Jump 策略（仅在时间片初始允许）
+            int jump_target = -1;
+            const int search_limit = G; // 向前搜索上限
+            int steps = 0;
+            int pos = disk.head_pos;
+            while (steps <= search_limit) {
+                if (disk.used_units.count(pos)) {
+                    Unit u = disk.used_units[pos];
+                    auto obj_it = objects.find(u.obj_id);
+                    if (obj_it != objects.end()) {
+                        bool needed = false;
+                        // 检查该对象是否有活跃请求且该块还未读取
+                        for (int req_id : obj_it->second.active_requests) {
+                            auto req_it = requests.find(req_id);
+                            if (req_it != requests.end()){
+                                if (!req_it->second.block_read[u.obj_offset]) {
+                                    needed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (needed) break;
+                    }
+                }
+                pos++;
+                if (pos > disk.capacity) pos = 1;
+                steps++;
+            }
+            // 如果空闲区间超过阈值（例如G个单位），则采用 Jump
+            if (steps >= G && steps <= search_limit && tokens == G) {
+                jump_target = pos;
+            }
+            if(jump_target != -1) {
+                act_str = "j " + to_string(jump_target);
+                tokens = 0; // Jump后本时间片内不再有动作
+                // 更新 head_pos 为 jump_target 后的下一个位置
+                disk.head_pos = jump_target + 1;
+                if(disk.head_pos > disk.capacity) disk.head_pos = 1;
+            } else {
+                // 原有逻辑：循环执行 read 或 pass 动作
+                int last_read_cost = (disk.pre_tokens > 0) ? disk.pre_tokens : 0;
+                while (tokens > 0) {
+                    int pos = disk.head_pos;
+                    auto it = disk.used_units.find(pos);
+                    if (it != disk.used_units.end()){
+                        int cost = (last_read_cost == 0) ? 64 : max(16, int(ceil(float(last_read_cost) * 0.8)));
+                        if (tokens >= cost) {
+                            act_str.push_back('r');
+                            tokens -= cost;
+                            last_read_cost = cost;
+                            
+                            Unit u = it->second;
+                            int obj_id = u.obj_id;
+                            auto obj_it = objects.find(obj_id);
+                            if (obj_it != objects.end()){
+                                Object &obj = obj_it->second;
+                                for (int req_id : obj.active_requests) {
+                                    auto req_it = requests.find(req_id);
+                                    if (req_it != requests.end()){
+                                        ReadRequest &req = req_it->second;
+                                        if (!req.block_read[u.obj_offset]) {
+                                            req.block_read[u.obj_offset] = true;
+                                            req.unique_blocks_read++;
+                                        }
+                                        // 检查是否完成
+                                        if (req.unique_blocks_read >= obj.size) {
+                                            pending_completed_requests.insert(req.req_id);
+                                        }
+                                        req.read_blocks[disk.id].insert(u.obj_offset);
+                                    }
+                                }
+                            }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        if (tokens >= 1) {
+                            act_str.push_back('p');
+                            tokens -= 1;
+                            last_read_cost = 0;
+                        } else {
+                            break;
+                        }
+                    }
+                    disk.head_pos++;
+                    if(disk.head_pos > disk.capacity) disk.head_pos = 1;
+                }
+                act_str.push_back('#');
+                if (act_str.size() > 1 && act_str[act_str.size()-2] == 'r')
+                    disk.pre_tokens = last_read_cost;
+                else
+                    disk.pre_tokens = 0;
+            }
+            actions.push_back(move(act_str));
+>>>>>>> Stashed changes
         }
         return actions;
     }
@@ -354,12 +561,16 @@ int main() {
     int T, M, N, V, G;
     cin >> T >> M >> N >> V >> G;
 
+<<<<<<< Updated upstream
     auto read_matrix = [](int rows) {
+=======
+    auto read_matrix = [&](int T, int rows) {
+>>>>>>> Stashed changes
         vector<vector<int>> mat(rows);
-        for(int i=0; i<rows; ++i) {
-            int cnt = (T+FRE_PER_SLICING-1)/FRE_PER_SLICING; // ceil(T/1800)
+        int cnt = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
+        for (int i = 0; i < rows; ++i) {
             mat[i].resize(cnt);
-            for(int j=0; j<cnt; ++j)
+            for (int j = 0; j < cnt; ++j)
                 cin >> mat[i][j];
         }
         return mat;
