@@ -179,21 +179,22 @@ public:
         if (candidates.size() < REP_NUM) return false;
 
         // 调整磁盘选择策略
-        const int BASE_BONUS = 1000;  // 基础分数，数值越低越优先
-        const int FACTOR = 100;  // 连续性奖励因子
+        const int BASE_BONUS = V;  // 基础分数，数值越低越优先
+        const int FACTOR_SEQ = 10;  // 连续性奖励因子
+        const int FACTOR_FRE = 1;  // 负载奖励因子
         sort(candidates.begin(), candidates.end(), [&, tag](Disk* a, Disk* b) {
             int bonus_a = BASE_BONUS, bonus_b = BASE_BONUS;
 
             // 优先选择已存储相同 `tag` 的磁盘
             if (a->tag_continuous.count(tag)) 
-                bonus_a = max(0, BASE_BONUS - FACTOR * a->tag_continuous[tag]);
+                bonus_a = max(0, BASE_BONUS - FACTOR_SEQ * a->tag_continuous[tag]);
             if (b->tag_continuous.count(tag)) 
-                bonus_b = max(0, BASE_BONUS - FACTOR * b->tag_continuous[tag]);
+                bonus_b = max(0, BASE_BONUS - FACTOR_SEQ * b->tag_continuous[tag]);
 
             // 评分 = (已用空间 + 碎片化程度)，数值越小越优
-            if (a->used_units.size() + bonus_a == b->used_units.size() + bonus_b)
+            if (a->used_units.size() * FACTOR_FRE + bonus_a == b->used_units.size() * FACTOR_FRE + bonus_b)
                 return a->used_units.size() < b->used_units.size();
-            return (a->used_units.size() + bonus_a) < (b->used_units.size() + bonus_b);
+            return (a->used_units.size() * FACTOR_FRE + bonus_a) < (b->used_units.size() * FACTOR_FRE + bonus_b);
         });
 
         Object obj;
