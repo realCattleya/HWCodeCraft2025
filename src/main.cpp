@@ -36,6 +36,8 @@ typedef struct Disk_ {
     int pre_tokens;
     string last_action;
     unordered_map<int, Unit> used_units;
+    unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
+    unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
 
     Disk_(int id, int v) : id(id), capacity(v) {}
 } Disk;
@@ -60,7 +62,7 @@ struct ReadRequest {
     int start_time;
     bool isdone;
     unordered_map<int, unordered_set<int>> read_blocks; // 原有记录，每个磁盘读到的块
-    vector<bool> block_read; // 新增：大小为对象块数，初始为 false
+    vector<bool> block_read; // 每个对象块是否被读到，大小为对象块数，初始为 false
     int unique_blocks_read = 0; // 已读到的唯一块数量
 };
 
@@ -75,13 +77,17 @@ private:
     vector<Disk> disks;
     unordered_map<int, Object> objects;
     unordered_map<int, ReadRequest> requests;
-    unordered_set<int> pending_completed_requests; // 新增：跟踪待完成的请求
+    unordered_set<int> pending_completed_requests; // 跟踪待完成的请求
     int current_time = 0;
-    
+    int current_time_interval = 0; // 记录当前的时间区间
+
     // pre-process data
     vector<vector<int>> fre_del;
     vector<vector<int>> fre_write;
     vector<vector<int>> fre_read;
+
+    // 新增：按时间段存储热度信息
+    vector<vector<double>> tag_hotness; // tag_hotness[tag][time_interval]
 
 public:
     StorageController(int T, int M, int N, int V, int G,
@@ -92,10 +98,23 @@ public:
           fre_del(del), fre_write(write), fre_read(read) {
         for(int i=1; i<=N; ++i)
             disks.emplace_back(i, V);
+
+        int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
+        tag_hotness.assign(M + 1, vector<double>(time_intervals, 0.0));
     }
 
     void pre_process(){
-        //TODO: preprocess
+        int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
+
+        // 逐个时间段计算每个 tag 的热度
+        for (int tag = 1; tag <= M; ++tag) {
+            for (int t = 0; t < time_intervals; ++t) {
+                long long total_write = fre_write[tag - 1][t];
+                long long total_read = fre_read[tag - 1][t];
+                // 计算热度：读取量 / (写入量 + 1)，防止除零
+                tag_hotness[tag][t] = (double)total_read / (total_write + 1);
+            }
+        }
         cout << "OK" << endl;
         cout.flush();
     }
@@ -104,6 +123,10 @@ public:
         string cmd;
         cin >> cmd >> current_time;
         assert(cmd == "TIMESTAMP");
+
+        // 计算当前时间片对应的时间段索引
+        current_time_interval = current_time / FRE_PER_SLICING;
+
         cout << "TIMESTAMP " << current_time << endl;
         cout.flush();
     }
@@ -113,21 +136,18 @@ public:
         for(int obj_id : obj_ids) {
             auto it = objects.find(obj_id);
             if(it == objects.end()) continue;
-
-            // erase objs disk units
+            // 清除该对象在各盘中占用的单元
             for(auto& rep : it->second.replicas) {
                 Disk& disk = disks[rep.disk_id-1];
                 for (int u : rep.units) {
                     disk.used_units.erase(u);
                 }
             }
-
-            // cancel corresponding requests
+            // 取消对应的读取请求
             for(int req_id : it->second.active_requests) {
                 aborted.push_back(req_id);
                 requests.erase(req_id);
             }
-            
             objects.erase(it);
         }
         return aborted;
@@ -139,12 +159,11 @@ public:
         cin >> n_del;
         vector<int> del_objs(n_del);
         for(int i=0; i<n_del; ++i) cin >> del_objs[i];
-
         // handle_delete
         auto aborted = handle_delete(del_objs);
-            cout << aborted.size() << endl;
-            for(int id : aborted) cout << id << endl;
-            cout.flush();
+        cout << aborted.size() << endl;
+        for(int id : aborted) cout << id << endl;
+        cout.flush();
     }
 
 
@@ -159,9 +178,22 @@ public:
         }
         if (candidates.size() < REP_NUM) return false;
 
-        // 按当前已用单元数量排序，选择空闲空间较多的磁盘
-        sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
-            return a->used_units.size() < b->used_units.size();
+        // 调整磁盘选择策略
+        const int BASE_BONUS = 1000;  // 基础分数，数值越低越优先
+        const int FACTOR = 100;  // 连续性奖励因子
+        sort(candidates.begin(), candidates.end(), [&, tag](Disk* a, Disk* b) {
+            int bonus_a = BASE_BONUS, bonus_b = BASE_BONUS;
+
+            // 优先选择已存储相同 `tag` 的磁盘
+            if (a->tag_continuous.count(tag)) 
+                bonus_a = max(0, BASE_BONUS - FACTOR * a->tag_continuous[tag]);
+            if (b->tag_continuous.count(tag)) 
+                bonus_b = max(0, BASE_BONUS - FACTOR * b->tag_continuous[tag]);
+
+            // 评分 = (已用空间 + 碎片化程度)，数值越小越优
+            if (a->used_units.size() + bonus_a == b->used_units.size() + bonus_b)
+                return a->used_units.size() < b->used_units.size();
+            return (a->used_units.size() + bonus_a) < (b->used_units.size() + bonus_b);
         });
 
         Object obj;
@@ -170,31 +202,59 @@ public:
         obj.tag = tag;
         obj.is_delete = false;
 
-        // 为每个副本分配单元
+        // 为每个副本分配空间
         for (int i = 0; i < REP_NUM; ++i) {
             Disk* target_disk = candidates[i];
             ObjectReplica rep;
             rep.disk_id = target_disk->id;
-            // 使用磁盘记录的 next_free_unit，避免每次从1开始扫描
-            int start = target_disk->next_free_unit;
+            
+            int start;
+            int last_alloc_before_write = target_disk->tag_last_allocated.count(tag) ? target_disk->tag_last_allocated[tag] : -1;
+
+            // 若磁盘已有该 tag 数据，则从 tag_last_allocated[tag] 之后开始分配
+            if (target_disk->tag_last_allocated.count(tag)) {
+                int expected = target_disk->tag_last_allocated[tag] + 1;
+                start = expected;
+            } else {
+                start = target_disk->next_free_unit;
+            }
+            if (start > target_disk->capacity) start = 1;
+
+            int first_alloc = start;
             for (int j = 0; j < size; ++j) {
-                // 从上次查找位置开始寻找空闲单元
-                while (target_disk->used_units.count(start)){
+                while (target_disk->used_units.count(start)) {
                     ++start;
-                    if(start > target_disk->capacity) start = 1;
+                    if (start > target_disk->capacity) start = 1;
                 }
                 rep.units.push_back(start);
                 Unit unit = { start, id, j };
                 target_disk->used_units[start] = unit;
+                target_disk->tag_last_allocated[tag] = start;
                 ++start;
-                if(start > target_disk->capacity) start = 1;
+                if (start > target_disk->capacity) start = 1;
             }
-            // 更新磁盘的下一个空闲单元指针
+
+            // 更新 next_free_unit 为扫描结束后的 start
             target_disk->next_free_unit = start;
+
+            // 更新 tag 连续存储信息
+            if (last_alloc_before_write != -1) {  // 只有 tag 之前有存储时才计算
+                int expected = last_alloc_before_write + 1;
+                if (expected > target_disk->capacity) expected = 1;
+                int old_cont = target_disk->tag_continuous.count(tag) ? target_disk->tag_continuous[tag] : 0;
+    
+                if (first_alloc == expected) {
+                    target_disk->tag_continuous[tag] = old_cont + size;
+                } else {
+                    target_disk->tag_continuous[tag] = size;
+                }
+            } else {
+                target_disk->tag_continuous[tag] = size;  // 第一次存储，初始化连续长度
+            }
+
             obj.replicas.push_back(move(rep));
         }
 
-        // 使用 move 语义避免拷贝
         objects[id] = move(obj);
         return true;
     }
@@ -385,12 +445,12 @@ int main() {
     int T, M, N, V, G;
     cin >> T >> M >> N >> V >> G;
 
-    auto read_matrix = [](int T, int rows) {
+    auto read_matrix = [&](int T, int rows) {
         vector<vector<int>> mat(rows);
-        for(int i=0; i<rows; ++i) {
-            int cnt = (T+FRE_PER_SLICING-1)/FRE_PER_SLICING; // ceil(T/1800)
+        int cnt = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
+        for (int i = 0; i < rows; ++i) {
             mat[i].resize(cnt);
-            for(int j=0; j<cnt; ++j)
+            for (int j = 0; j < cnt; ++j)
                 cin >> mat[i][j];
         }
         return mat;
