@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <vector>
 #include <string>
+#include <iostream>
 
 typedef struct Unit_ {
     int unit_id;
@@ -15,7 +16,7 @@ typedef struct Disk_ {
     int id;
     int capacity;
     int head_pos = 1;
-    int next_free_unit = 1;
+    std::vector<int> next_free_unit;
     int pre_tokens;
     std::string last_action;
     std::unordered_map<int, Unit> used_units;
@@ -24,6 +25,23 @@ typedef struct Disk_ {
 
     Disk_(){}
     Disk_(int id, int v) : id(id), capacity(v) {}
+    void partition_units(std::vector<long long> tags_size_sum){
+        long long total = 0;
+        std::vector<int> partition;
+        for(long long size : tags_size_sum){
+            total += size;
+        }
+        for(long long size : tags_size_sum){
+            partition.push_back(int(double(size)/double(total)*double(capacity)));
+        }
+        next_free_unit.push_back(0); // tag 从 1 开始数
+        int start = 1;
+        for(int p : partition){
+            next_free_unit.push_back(start);
+            start+=p;
+        }
+    }
+
     void insert(int unit_id, int obj_id, int obj_offset, int tag) {
         Unit unit = {unit_id, obj_id, obj_offset};
         used_units[unit_id] = unit;

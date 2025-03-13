@@ -21,6 +21,7 @@ class StorageController {
     
         // 新增：按时间段存储热度信息
         std::vector<std::vector<double>> tag_hotness; // tag_hotness[tag][time_interval]
+        std::vector<std::vector<std::vector<int>>> latin_templates;
     
     public:
         StorageController(int T, int M, int N, int V, int G,

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cmath>
 #include <algorithm>
+#include <random>
 using namespace std;
 
 StorageController::StorageController(int T, int M, int N, int V, int G,
@@ -11,24 +12,42 @@ StorageController::StorageController(int T, int M, int N, int V, int G,
     vector<vector<int>>& read)
 : T(T), M(M), N(N), V(V), G(G),
 fre_del(del), fre_write(write), fre_read(read) {
-    for(int i=1; i<=N; ++i)
-    disks.emplace_back(i, V);
+    for(int i=1; i<=N; ++i){
+        disks.emplace_back(i, V);
+    }
 
     int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
     tag_hotness.assign(M + 1, vector<double>(time_intervals, 0.0));
+    for (int i = 1; i < 4; ++i) {
+        std::vector<std::vector<int>> layer;
+        for (int x = 1; x < N; ++x) {
+            std::vector<int> row;
+            for (int y = 0; y < N; ++y) {
+                row.push_back(((i * x + y) % N)+1); // 有限域构造法
+            }
+            layer.push_back(row);
+        }
+        latin_templates.push_back(layer);
+    }
 }
 
 void StorageController::pre_process(){
     int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
 
     // 逐个时间段计算每个 tag 的热度
+    vector<long long> tags_size_sum;
     for (int tag = 1; tag <= M; ++tag) {
+        tags_size_sum.push_back(fre_write[tag - 1][0]);
         for (int t = 0; t < time_intervals; ++t) {
             long long total_write = fre_write[tag - 1][t];
             long long total_read = fre_read[tag - 1][t];
             // 计算热度：读取量 / (写入量 + 1)，防止除零
             tag_hotness[tag][t] = (double)total_read / (total_write + 1);
         }
+    }
+    for (Disk& disk : disks){
+        // 以第一个片段的写入量为划分比
+        disk.partition_units(tags_size_sum);
     }
     cout << "OK" << endl;
     cout.flush();
@@ -84,80 +103,61 @@ void StorageController::delete_action(){
 
 
 bool StorageController::write_object(int id, int size, int tag) {
-    // 预分配候选磁盘数组空间
+    // 如果使用  id%(N*(N-1)) 的方式来选择正交拉丁表的元组，会出现disk号小先塞满的情况。
+    // 这可能是由于没有考虑到size大小的问题
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, N*(N-1)); 
+    int random_number = dis(gen);
+    int x = id%(N*(N-1))/N;
+    int y = id%(N*(N-1))%N;
+    //int x = random_number%(N*(N-1))/N;
+    //int y = random_number%(N*(N-1))%N;
+    int latin_assign_disk_ids[3] = {latin_templates[0][x][y],latin_templates[1][x][y],latin_templates[2][x][y]};
     vector<Disk*> candidates;
     candidates.reserve(disks.size());
+    bool is_latin_layout = true;
     for (auto &d : disks) {
-        if (d.used_units.size() + size <= V)
-            candidates.push_back(&d);
+        if (d.id == latin_templates[0][x][y] || d.id == latin_templates[1][x][y] || d.id == latin_templates[2][x][y]){
+            if (d.used_units.size() + size <= V){
+                candidates.push_back(&d);
+            }
+        }
     }
-    if (candidates.size() < REP_NUM) return false;
-
-    // 调整磁盘选择策略
-    const int BASE_BONUS = 1000;  // 基础分数，数值越低越优先
-    const int FACTOR = 100;  // 连续性奖励因子
-    sort(candidates.begin(), candidates.end(), [&, tag](Disk* a, Disk* b) {
-        int bonus_a = BASE_BONUS, bonus_b = BASE_BONUS;
-
-        // 优先选择已存储相同 `tag` 的磁盘
-        if (a->tag_continuous.count(tag)) 
-            bonus_a = max(0, BASE_BONUS - FACTOR * a->tag_continuous[tag]);
-        if (b->tag_continuous.count(tag)) 
-            bonus_b = max(0, BASE_BONUS - FACTOR * b->tag_continuous[tag]);
-
-        // 评分 = (已用空间 + 碎片化程度)，数值越小越优
-        if (a->used_units.size() + bonus_a == b->used_units.size() + bonus_b)
+    if (candidates.size() < REP_NUM) 
+        is_latin_layout = false;
+    if(!is_latin_layout){
+        candidates.clear();
+        for (auto &d : disks) {
+            if (d.used_units.size() + size <= V)
+                candidates.push_back(&d);
+        }
+        // 按当前已用单元数量排序，选择空闲空间较多的磁盘
+        sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
             return a->used_units.size() < b->used_units.size();
-        return (a->used_units.size() + bonus_a) < (b->used_units.size() + bonus_b);
-    });
-
+        });
+    }
+    if (candidates.size() < REP_NUM) {
+        cerr << "false!" << endl;
+        return false;
+    }
     Object obj(id,size,tag);
-
     // 为每个副本分配空间
+    // TODO: 分区满后的写入仍有优化空间
     for (int i = 0; i < REP_NUM; ++i) {
         Disk* target_disk = candidates[i];
         std::vector<int> target_units;
-        
-        int start;
-        int last_alloc_before_write = target_disk->tag_last_allocated.count(tag) ? target_disk->tag_last_allocated[tag] : -1;
+        int start = target_disk->next_free_unit[tag];
 
-        // 若磁盘已有该 tag 数据，则从 tag_last_allocated[tag] 之后开始分配
-        if (target_disk->tag_last_allocated.count(tag)) {
-            int expected = target_disk->tag_last_allocated[tag] + 1;
-            start = expected;
-        } else {
-            start = target_disk->next_free_unit;
-        }
-        if (start > target_disk->capacity) start = 1;
-
-        int first_alloc = start;
-        for (int j = 0; j < size; ++j) {
-            while (target_disk->used_units.count(start)) {
+        for(int j = 0; j < size; ++j){
+            while (target_disk->used_units.count(start)){
                 ++start;
-                if (start > target_disk->capacity) start = 1;
+                if(start > target_disk->capacity) start = 1;
             }
             target_units.push_back(start);
             target_disk->insert(start, id, j, tag);
             ++start;
             if (start > target_disk->capacity) start = 1;
-        }
-
-        // 更新 next_free_unit 为扫描结束后的 start
-        target_disk->next_free_unit = start;
-
-        // 更新 tag 连续存储信息
-        if (last_alloc_before_write != -1) {  // 只有 tag 之前有存储时才计算
-            int expected = last_alloc_before_write + 1;
-            if (expected > target_disk->capacity) expected = 1;
-            int old_cont = target_disk->tag_continuous.count(tag) ? target_disk->tag_continuous[tag] : 0;
-
-            if (first_alloc == expected) {
-                target_disk->tag_continuous[tag] = old_cont + size;
-            } else {
-                target_disk->tag_continuous[tag] = size;
-            }
-        } else {
-            target_disk->tag_continuous[tag] = size;  // 第一次存储，初始化连续长度
         }
 
         obj.replica_allocate(target_disk->id, target_units);
