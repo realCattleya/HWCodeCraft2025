@@ -28,9 +28,11 @@ class StorageController {
             std::vector<std::vector<int>>& write,
             std::vector<std::vector<int>>& read);
         void pre_process();
+        void update_disk_regions();
         void timestamp_align();
         std::vector<int> handle_delete(const std::vector<int>& obj_ids);
         void delete_action();
+        int free_in_region(Disk* disk, int tag);
         bool write_object(int id, int size, int tag);
         void write_action();
         void process_read_request(int req_id, int obj_id);

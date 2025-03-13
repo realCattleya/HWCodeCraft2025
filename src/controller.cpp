@@ -34,13 +34,43 @@ void StorageController::pre_process(){
     cout.flush();
 }
 
+// 根据当前时间段热度动态更新每块磁盘的区域规划
+void StorageController::update_disk_regions() {
+    for (auto &disk : disks) {
+        double total_hot = 0.0;
+        // 计算当前时间段所有 tag 的热度之和
+        for (int tag = 1; tag <= M; ++tag) {
+            total_hot += tag_hotness[tag][current_time_interval];
+        }
+        int current_start = 1;
+        // 对每个 tag 按热度比例划分区域
+        for (int tag = 1; tag <= M; ++tag) {
+            int region_size = 0;
+            if (total_hot == 0.0) {
+                region_size = V / M;
+            } else {
+                region_size = int((tag_hotness[tag][current_time_interval] / total_hot) * V);
+            }
+            if (region_size < 1) region_size = 1;
+            int region_end = current_start + region_size - 1;
+            if (region_end > disk.capacity) region_end = disk.capacity;
+            disk.tag_region[tag] = make_pair(current_start, region_end);
+            current_start = region_end + 1;
+            if (current_start > disk.capacity) break;
+        }
+    }
+}
+
 void StorageController::timestamp_align(){
     string cmd;
     cin >> cmd >> current_time;
     assert(cmd == "TIMESTAMP");
 
     // 计算当前时间片对应的时间段索引
-    current_time_interval = current_time / FRE_PER_SLICING;
+    if (current_time_interval != current_time / FRE_PER_SLICING || current_time == 0) {
+        current_time_interval = current_time / FRE_PER_SLICING;
+        update_disk_regions();  // 每个新的时间段更新区域规划
+    }
 
     cout << "TIMESTAMP " << current_time << endl;
     cout.flush();
@@ -81,7 +111,18 @@ void StorageController::delete_action(){
     cout.flush();
 }
 
-
+// 辅助函数：计算指定磁盘中 tag 区域内的空闲单元数
+int StorageController::free_in_region(Disk* disk, int tag) {
+    if (!disk->tag_region.count(tag))
+        return disk->capacity - disk->used_units.size(); // 没有规划区域则使用全盘空闲数
+    auto region = disk->tag_region[tag];
+    int freeCount = 0;
+    for (int pos = region.first; pos <= region.second; ++pos) {
+        if (!disk->used_units.count(pos))
+            freeCount++;
+    }
+    return freeCount;
+}
 
 bool StorageController::write_object(int id, int size, int tag) {
     // 预分配候选磁盘数组空间
@@ -94,21 +135,28 @@ bool StorageController::write_object(int id, int size, int tag) {
     if (candidates.size() < REP_NUM) return false;
 
     // 调整磁盘选择策略
-    const int BASE_BONUS = 1000;  // 基础分数，数值越低越优先
-    const int FACTOR = 100;  // 连续性奖励因子
+    const int BASE_BONUS = V;  // 基础分数，数值越低越优先
+    const int FACTOR_SEQ = 1;  // 连续性奖励因子
+    const int FACTOR_FRE = 1;  // 负载奖励因子
     sort(candidates.begin(), candidates.end(), [&, tag](Disk* a, Disk* b) {
         int bonus_a = BASE_BONUS, bonus_b = BASE_BONUS;
 
         // 优先选择已存储相同 `tag` 的磁盘
         if (a->tag_continuous.count(tag)) 
-            bonus_a = max(0, BASE_BONUS - FACTOR * a->tag_continuous[tag]);
+            bonus_a = max(0, BASE_BONUS - FACTOR_SEQ * a->tag_continuous[tag]);
         if (b->tag_continuous.count(tag)) 
-            bonus_b = max(0, BASE_BONUS - FACTOR * b->tag_continuous[tag]);
+            bonus_b = max(0, BASE_BONUS - FACTOR_SEQ * b->tag_continuous[tag]);
 
-        // 评分 = (已用空间 + 碎片化程度)，数值越小越优
-        if (a->used_units.size() + bonus_a == b->used_units.size() + bonus_b)
-            return a->used_units.size() < b->used_units.size();
-        return (a->used_units.size() + bonus_a) < (b->used_units.size() + bonus_b);
+        // 计算规划区域内的空闲单元，区域空闲越少则惩罚越大
+        int free_a = free_in_region(a, tag);
+        int free_b = free_in_region(b, tag);
+        int region_size_a = (a->tag_region.count(tag)) ? (a->tag_region[tag].second - a->tag_region[tag].first + 1) : V;
+        int region_size_b = (b->tag_region.count(tag)) ? (b->tag_region[tag].second - b->tag_region[tag].first + 1) : V;
+        int penalty_a = (a->tag_region.count(tag)) ? (region_size_a - free_a) : 0;
+        int penalty_b = (b->tag_region.count(tag)) ? (region_size_b - free_b) : 0;
+        int score_a = a->used_units.size() * FACTOR_FRE + bonus_a + penalty_a * FACTOR_FRE;
+        int score_b = b->used_units.size() * FACTOR_FRE + bonus_b + penalty_b * FACTOR_FRE;
+        return score_a < score_b;
     });
 
     Object obj(id,size,tag);
@@ -118,48 +166,74 @@ bool StorageController::write_object(int id, int size, int tag) {
         Disk* target_disk = candidates[i];
         std::vector<int> target_units;
         
-        int start;
+        // 保存写入前该 tag 在磁盘上最后一次存储的位置
         int last_alloc_before_write = target_disk->tag_last_allocated.count(tag) ? target_disk->tag_last_allocated[tag] : -1;
-
-        // 若磁盘已有该 tag 数据，则从 tag_last_allocated[tag] 之后开始分配
-        if (target_disk->tag_last_allocated.count(tag)) {
-            int expected = target_disk->tag_last_allocated[tag] + 1;
-            start = expected;
+        
+        int start;
+        // 如果磁盘有为该 tag 预规划的区域，则优先在区域内分配
+        if (target_disk->tag_region.count(tag)) {
+            auto region = target_disk->tag_region[tag];  // (region_start, region_end)
+            bool found = false;
+            // 在区域内从 region.first 到 region.second 查找第一个空闲单元
+            for (int pos = region.first; pos <= region.second; ++pos) {
+                if (!target_disk->used_units.count(pos)) {
+                    start = pos;
+                    found = true;
+                    break;
+                }
+            }
+            // 若区域内没有空闲单元，则退化为全局分配：如果已有该 tag 数据，则从上次位置后开始
+            if (!found) {
+                if (target_disk->tag_last_allocated.count(tag))
+                    start = target_disk->tag_last_allocated[tag] + 1;
+                else
+                    start = target_disk->next_free_unit;
+            }
         } else {
-            start = target_disk->next_free_unit;
+            // 若没有预规划区域，则使用原来的全局分配策略
+            if (target_disk->tag_last_allocated.count(tag))
+                start = target_disk->tag_last_allocated[tag] + 1;
+            else
+                start = target_disk->next_free_unit;
         }
         if (start > target_disk->capacity) start = 1;
 
+        // 保存本轮写入的起始分配位置，用于连续性判断
         int first_alloc = start;
+        
+        // 分配 size 个存储单元
         for (int j = 0; j < size; ++j) {
             while (target_disk->used_units.count(start)) {
                 ++start;
                 if (start > target_disk->capacity) start = 1;
             }
             target_units.push_back(start);
+            // 假设 insert 函数完成插入操作：将单元 start 上写入对象 id 的第 j 块，记录 tag
             target_disk->insert(start, id, j, tag);
             ++start;
             if (start > target_disk->capacity) start = 1;
         }
-
-        // 更新 next_free_unit 为扫描结束后的 start
+        
+        // 更新 next_free_unit 为扫描结束后的位置
         target_disk->next_free_unit = start;
-
+        
         // 更新 tag 连续存储信息
-        if (last_alloc_before_write != -1) {  // 只有 tag 之前有存储时才计算
+        // 利用写入前保存的 last_alloc_before_write 判断连续性
+        if (last_alloc_before_write != -1) {  // 只有 tag 之前已有数据时才判断
             int expected = last_alloc_before_write + 1;
             if (expected > target_disk->capacity) expected = 1;
             int old_cont = target_disk->tag_continuous.count(tag) ? target_disk->tag_continuous[tag] : 0;
-
-            if (first_alloc == expected) {
+            // 如果本次分配的起始位置正好等于 expected，则认为连续存储
+            if (first_alloc == expected)
                 target_disk->tag_continuous[tag] = old_cont + size;
-            } else {
+            else
                 target_disk->tag_continuous[tag] = size;
-            }
         } else {
-            target_disk->tag_continuous[tag] = size;  // 第一次存储，初始化连续长度
+            // 第一次存储，初始化连续长度为 size
+            target_disk->tag_continuous[tag] = size;
         }
-
+        
+        // 将本次分配的单元记录到对象中
         obj.replica_allocate(target_disk->id, target_units);
     }
 

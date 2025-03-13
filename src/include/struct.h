@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <vector>
 #include <string>
+#include <utility>
 
 typedef struct Unit_ {
     int unit_id;
@@ -21,6 +22,8 @@ typedef struct Disk_ {
     std::unordered_map<int, Unit> used_units;
     std::unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
     std::unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
+    // 新增：预规划的区域划分，键为 tag，值为 (region_start, region_end)
+    std::unordered_map<int, std::pair<int, int>> tag_region;
 
     Disk_(){}
     Disk_(int id, int v) : id(id), capacity(v) {}
