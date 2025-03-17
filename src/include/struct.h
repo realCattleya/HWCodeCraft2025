@@ -84,12 +84,14 @@ typedef struct ReadRequest_ {
     std::unordered_map<int, std::unordered_set<int>> read_blocks; // 原有记录，每个磁盘读到的块
     std::vector<bool> block_read; // 每个对象块是否被读到，大小为对象块数，初始为 false
     int unique_blocks_read = 0; // 已读到的唯一块数量
+
+    Object *target;
     
     ReadRequest_(){}
-    ReadRequest_(int req_id, int start_time, Object& obj) : req_id(req_id), start_time(start_time){
-        obj_id = obj.id;
+    ReadRequest_(int req_id, int start_time, Object *obj) : req_id(req_id), start_time(start_time), target(obj) {
+        obj_id = obj->id;
         isdone = false;
-        block_read.assign(obj.size, false);
+        block_read.assign(obj->size, false);
         unique_blocks_read = 0;
     }
-}ReadRequest;
+} ReadRequest;

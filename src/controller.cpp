@@ -13,7 +13,7 @@ StorageController::StorageController(int T, int M, int N, int V, int G,
 : T(T), M(M), N(N), V(V), G(G),
 fre_del(del), fre_write(write), fre_read(read) {
     for(int i=1; i<=N; ++i){
-        disks.emplace_back(i, V);
+        disks.push_back(new Disk(i, V));
     }
 
     int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
@@ -45,9 +45,9 @@ void StorageController::pre_process(){
             tag_hotness[tag][t] = (double)total_read / (total_write + 1);
         }
     }
-    for (Disk& disk : disks){
+    for (Disk* disk : disks){
         // 以第一个片段的写入量为划分比
-        disk.partition_units(tags_size_sum);
+        disk->partition_units(tags_size_sum);
     }
     cout << "OK" << endl;
     cout.flush();
@@ -71,14 +71,14 @@ vector<int> StorageController::handle_delete(const vector<int>& obj_ids){
         auto it = objects.find(obj_id);
         if(it == objects.end()) continue;
         // 清除该对象在各盘中占用的单元
-        for(auto& rep : it->second.replicas) {
-            Disk& disk = disks[rep.disk_id-1];
+        for(auto& rep : it->second->replicas) {
+            Disk* disk = disks[rep.disk_id-1];
             for (int u : rep.units) {
-                disk.erase(u);
+                disk->erase(u);
             }
         }
         // 取消对应的读取请求
-        for(int req_id : it->second.active_requests) {
+        for(int req_id : it->second->active_requests) {
             aborted.push_back(req_id);
             requests.erase(req_id);
         }
@@ -117,10 +117,12 @@ bool StorageController::write_object(int id, int size, int tag) {
     vector<Disk*> candidates;
     candidates.reserve(disks.size());
     bool is_latin_layout = true;
-    for (auto &d : disks) {
-        if (d.id == latin_templates[0][x][y] || d.id == latin_templates[1][x][y] || d.id == latin_templates[2][x][y]){
-            if (d.used_units.size() + size <= V){
-                candidates.push_back(&d);
+    for (auto d : disks) {
+        if (d->id == latin_templates[0][x][y] || 
+            d->id == latin_templates[1][x][y] || 
+            d->id == latin_templates[2][x][y]){
+            if (d->used_units.size() + size <= V){
+                candidates.push_back(d);
             }
         }
     }
@@ -129,8 +131,8 @@ bool StorageController::write_object(int id, int size, int tag) {
     if(!is_latin_layout){
         candidates.clear();
         for (auto &d : disks) {
-            if (d.used_units.size() + size <= V)
-                candidates.push_back(&d);
+            if (d->used_units.size() + size <= V)
+                candidates.push_back(d);
         }
         // 按当前已用单元数量排序，选择空闲空间较多的磁盘
         sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
@@ -141,7 +143,7 @@ bool StorageController::write_object(int id, int size, int tag) {
         cerr << "false!" << endl;
         return false;
     }
-    Object obj(id,size,tag);
+    auto obj = new Object(id,size,tag);
     // 为每个副本分配空间
     // TODO: 分区满后的写入仍有优化空间
     for (int i = 0; i < REP_NUM; ++i) {
@@ -160,10 +162,10 @@ bool StorageController::write_object(int id, int size, int tag) {
             if (start > target_disk->capacity) start = 1;
         }
 
-        obj.replica_allocate(target_disk->id, target_units);
+        obj->replica_allocate(target_disk->id, target_units);
     }
 
-    objects[id] = move(obj);
+    objects[id] = obj;
     return true;
 }
 
@@ -186,9 +188,9 @@ void StorageController::write_action(){
                 exit(1);
             }
             
-            auto& obj = objects[id];
-            cout << obj.id << endl;
-            for(auto& rep : obj.replicas) {
+            auto obj = objects[id];
+            cout << obj->id << endl;
+            for(auto& rep : obj->replicas) {
                 cout << rep.disk_id;
                 for(int u : rep.units)  cout << " " << u;
                 cout << endl;
@@ -200,9 +202,9 @@ void StorageController::write_action(){
 void StorageController::process_read_request(int req_id, int obj_id) {
     auto obj_it = objects.find(obj_id);
     if (obj_it == objects.end()) return;
-    ReadRequest req(req_id, current_time, obj_it->second);
+    auto req = new ReadRequest(req_id, current_time, obj_it->second);
     requests[req_id] = req;
-    obj_it->second.active_requests.insert(req_id);
+    obj_it->second->active_requests.insert(req_id);
 }
     
 
@@ -210,7 +212,7 @@ void StorageController::process_read_request(int req_id, int obj_id) {
 vector<string> StorageController::generate_disk_actions() {
     vector<string> actions;
     actions.reserve(disks.size());
-    for (auto &disk : disks) {
+    for (auto disk : disks) {
         
         int tokens = G; 
         string act_str;
@@ -220,18 +222,18 @@ vector<string> StorageController::generate_disk_actions() {
         int jump_target = -1;
         const int search_limit = G; // 向前搜索上限
         int steps = 0;
-        int pos = disk.head_pos;
+        int pos = disk->head_pos;
         while (steps <= search_limit) {
-            if (disk.used_units.count(pos)) {
-                Unit u = disk.used_units[pos];
+            if (disk->used_units.count(pos)) {
+                Unit u = disk->used_units[pos];
                 auto obj_it = objects.find(u.obj_id);
                 if (obj_it != objects.end()) {
                     bool needed = false;
                     // 检查该对象是否有活跃请求且该块还未读取
-                    for (int req_id : obj_it->second.active_requests) {
+                    for (int req_id : obj_it->second->active_requests) {
                         auto req_it = requests.find(req_id);
                         if (req_it != requests.end()){
-                            if (!req_it->second.block_read[u.obj_offset]) {
+                            if (!req_it->second->block_read[u.obj_offset]) {
                                 needed = true;
                                 break;
                             }
@@ -241,7 +243,7 @@ vector<string> StorageController::generate_disk_actions() {
                 }
             }
             pos++;
-            if (pos > disk.capacity) pos = 1;
+            if (pos > disk->capacity) pos = 1;
             steps++;
         }
         // 如果空闲区间超过阈值（例如G个单位），则采用 Jump
@@ -252,18 +254,18 @@ vector<string> StorageController::generate_disk_actions() {
             act_str = "j " + to_string(jump_target);
             tokens = 0; // Jump后本时间片内不再有动作
             // 更新 head_pos 为 jump_target 后的下一个位置
-            disk.head_pos = jump_target;
-            disk.pre_tokens = 0;
+            disk->head_pos = jump_target;
+            disk->pre_tokens = 0;
             actions.push_back(move(act_str));
         } else {
         
             // 如果上一个时间片有 read 动作，则根据其令牌消耗计算首次 read 消耗
-            int last_read_cost = (disk.pre_tokens > 0) ? disk.pre_tokens : 0;
+            int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;
             
             while (tokens > 0) {
-                int pos = disk.head_pos;
-                auto it = disk.used_units.find(pos);
-                if (it != disk.used_units.end()) {
+                int pos = disk->head_pos;
+                auto it = disk->used_units.find(pos);
+                if (it != disk->used_units.end()) {
                     // 当前有对象块，计划执行 Read 操作
                     int cost = (last_read_cost == 0) ? 64 : max(16, int(ceil(float(last_read_cost) * 0.8) ));
                     if (tokens >= cost) {
@@ -276,27 +278,27 @@ vector<string> StorageController::generate_disk_actions() {
                         int blk_idx = u.obj_offset;
                         auto obj_it = objects.find(obj_id);
                         if (obj_it != objects.end()) {
-                            Object &obj = obj_it->second;
+                            Object *obj = obj_it->second;
                             // 遍历所有活跃该对象的读请求，更新增量计数器
-                            for (int req_id : obj.active_requests) {
+                            for (int req_id : obj->active_requests) {
                                 auto req_it = requests.find(req_id);
                                 if (req_it != requests.end()){
-                                    ReadRequest &req = req_it->second;
+                                    ReadRequest *req = req_it->second;
                                     // 如果该块第一次被读到，则更新计数器
-                                    if (!req.block_read[blk_idx]) {
-                                        req.block_read[blk_idx] = true;
-                                        req.unique_blocks_read++;
+                                    if (!req->block_read[blk_idx]) {
+                                        req->block_read[blk_idx] = true;
+                                        req->unique_blocks_read++;
                                     }
                                     // 检查是否完成
-                                    auto obj_it = objects.find(req.obj_id);
+                                    auto obj_it = objects.find(req->obj_id);
                                     if (obj_it != objects.end()) {
-                                        Object& obj = obj_it->second;
-                                        if (req.unique_blocks_read >= obj.size) {
-                                            pending_completed_requests.insert(req.req_id);
+                                        Object *obj = obj_it->second;
+                                        if (req->unique_blocks_read >= obj->size) {
+                                            pending_completed_requests.insert(req->req_id);
                                         }
                                     }
                                     // 仍然保留原有 read_blocks 记录（如果有其他用途）
-                                    req.read_blocks[disk.id].insert(blk_idx);
+                                    req->read_blocks[disk->id].insert(blk_idx);
                                 }
                             }
                         }
@@ -314,15 +316,17 @@ vector<string> StorageController::generate_disk_actions() {
                     }
                 }
                 // 更新磁头位置（环形排列）
-                disk.head_pos++;
-                if(disk.head_pos>disk.capacity) disk.head_pos = 1;
+                disk->head_pos++;
+                if(disk->head_pos>disk->capacity) {
+                    disk->head_pos = 1;
+                }
             }
             act_str.push_back('#');
             // 如果本时间片最后一个动作为 Read，则记录其令牌消耗；否则置 0
             if (act_str.size() > 1 && act_str[act_str.size()-2] == 'r')
-                disk.pre_tokens = last_read_cost;
+                disk->pre_tokens = last_read_cost;
             else
-                disk.pre_tokens = 0;
+                disk->pre_tokens = 0;
             actions.push_back(move(act_str));
         }
     }
@@ -336,17 +340,17 @@ vector<int> StorageController::check_completed_requests() {
         auto req_it = requests.find(req_id);
         if (req_it == requests.end()) continue; // 请求已被处理或取消
 
-        ReadRequest& req = req_it->second;
-        auto obj_it = objects.find(req.obj_id);
+        ReadRequest* req = req_it->second;
+        auto obj_it = objects.find(req->obj_id);
         if (obj_it == objects.end()) {
             // 对象已删除，标记为完成
             completed.push_back(req_id);
             requests.erase(req_id);
         } else {
-            Object& obj = obj_it->second;
-            if (req.unique_blocks_read >= obj.size) {
+            Object *obj = obj_it->second;
+            if (req->unique_blocks_read >= obj->size) {
                 completed.push_back(req_id);
-                obj.active_requests.erase(req_id);
+                obj->active_requests.erase(req_id);
                 requests.erase(req_id);
             }
         }

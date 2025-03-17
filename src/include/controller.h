@@ -7,9 +7,9 @@ class StorageController {
         int N; // total disks number
         int V; // units number per disk
         int G; // tokens budget per disk
-        std::vector<Disk> disks;
-        std::unordered_map<int, Object> objects;
-        std::unordered_map<int, ReadRequest> requests;
+        std::vector<Disk *> disks;
+        std::unordered_map<int, Object *> objects;
+        std::unordered_map<int, ReadRequest *> requests;
         std::unordered_set<int> pending_completed_requests; // 跟踪待完成的请求
         int current_time = 0;
         int current_time_interval = 0; // 记录当前的时间区间
