@@ -4,3 +4,4 @@ test/*
 *.exe
 CMakeLists*
 *vscode
+*.zip
