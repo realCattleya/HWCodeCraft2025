@@ -61,6 +61,24 @@ void StorageController::timestamp_align(){
     // 计算当前时间片对应的时间段索引
     current_time_interval = current_time / FRE_PER_SLICING;
 
+    // 删除所有过期请求
+    auto it = requests.begin();
+    while (it != requests.end())
+    {
+        auto req = it->second;
+        if (req->expire_time <= current_time) {
+            if (req->target->active_requests.find(req->req_id) != req->target->active_requests.end()) {
+                req->target->active_requests.erase(req->req_id);
+                req->target->invalid_requests.push_back(req->req_id);
+            }
+            
+            it = requests.erase(it);
+        } else {
+            it++;
+        }
+    }
+    
+
     cout << "TIMESTAMP " << current_time << endl;
     cout.flush();
 }
@@ -79,6 +97,10 @@ vector<int> StorageController::handle_delete(const vector<int>& obj_ids){
         }
         // 取消对应的读取请求
         for(int req_id : it->second->active_requests) {
+            aborted.push_back(req_id);
+            requests.erase(req_id);
+        }
+        for(int req_id : it->second->invalid_requests) {
             aborted.push_back(req_id);
             requests.erase(req_id);
         }

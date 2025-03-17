@@ -67,6 +67,7 @@ typedef struct Object_ {
     bool is_delete;
     std::vector<ObjectReplica> replicas;
     std::unordered_set<int> active_requests;
+    std::vector<int> invalid_requests;
 
     Object_(){}
     Object_(int id, int size, int tag) : id(id), size(size), tag(tag), is_delete(false) {}
@@ -76,10 +77,11 @@ typedef struct Object_ {
     }
 } Object;
 
-typedef struct ReadRequest_ {
+struct ReadRequest {
     int req_id;
     int obj_id;
     int start_time;
+    int expire_time;
     bool isdone;
     std::unordered_map<int, std::unordered_set<int>> read_blocks; // 原有记录，每个磁盘读到的块
     std::vector<bool> block_read; // 每个对象块是否被读到，大小为对象块数，初始为 false
@@ -87,11 +89,12 @@ typedef struct ReadRequest_ {
 
     Object *target;
     
-    ReadRequest_(){}
-    ReadRequest_(int req_id, int start_time, Object *obj) : req_id(req_id), start_time(start_time), target(obj) {
+    ReadRequest(){}
+    ReadRequest(int req_id, int start_time, Object *obj) : req_id(req_id), start_time(start_time), target(obj) {
         obj_id = obj->id;
         isdone = false;
         block_read.assign(obj->size, false);
         unique_blocks_read = 0;
+        expire_time = start_time + 105;
     }
-} ReadRequest;
+};
