@@ -143,7 +143,7 @@ bool StorageController::write_object(int id, int size, int tag) {
         if (d->id == latin_templates[0][x][y] || 
             d->id == latin_templates[1][x][y] || 
             d->id == latin_templates[2][x][y]){
-            if (d->used_units.size() + size <= V){
+            if (d->used_capcity + size <= V){
                 candidates.push_back(d);
             }
         }
@@ -153,12 +153,12 @@ bool StorageController::write_object(int id, int size, int tag) {
     if(!is_latin_layout){
         candidates.clear();
         for (auto &d : disks) {
-            if (d->used_units.size() + size <= V)
+            if (d->used_capcity + size <= V)
                 candidates.push_back(d);
         }
         // 按当前已用单元数量排序，选择空闲空间较多的磁盘
         sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
-            return a->used_units.size() < b->used_units.size();
+            return a->used_capcity < b->used_capcity;
         });
     }
     if (candidates.size() < REP_NUM) {
@@ -174,7 +174,7 @@ bool StorageController::write_object(int id, int size, int tag) {
         int start = target_disk->next_free_unit[tag];
 
         for(int j = 0; j < size; ++j){
-            while (target_disk->used_units.count(start)){
+            while (target_disk->units[start].obj_id != -1){
                 ++start;
                 if(start > target_disk->capacity) start = 1;
             }
@@ -246,8 +246,8 @@ vector<string> StorageController::generate_disk_actions() {
         int steps = 0;
         int pos = disk->head_pos;
         while (steps <= search_limit) {
-            if (disk->used_units.count(pos)) {
-                Unit u = disk->used_units[pos];
+            if (disk->units[pos].obj_id != -1) {
+                Unit &u = disk->units[pos];
                 auto obj_it = objects.find(u.obj_id);
                 if (obj_it != objects.end()) {
                     bool needed = false;
@@ -286,8 +286,9 @@ vector<string> StorageController::generate_disk_actions() {
             
             while (tokens > 0) {
                 int pos = disk->head_pos;
-                auto it = disk->used_units.find(pos);
-                if (it != disk->used_units.end()) {
+                // auto it = disk->used_units.find(pos);
+                Unit *it = disk->units + pos;
+                if (it->obj_id != -1) {
                     // 当前有对象块，计划执行 Read 操作
                     int cost = (last_read_cost == 0) ? 64 : max(16, int(ceil(float(last_read_cost) * 0.8) ));
                     if (tokens >= cost) {
@@ -295,9 +296,9 @@ vector<string> StorageController::generate_disk_actions() {
                         tokens -= cost;
                         last_read_cost = cost;  // 更新当前 Read 消耗
                         
-                        Unit u = it->second; // 当前读取的单元
-                        int obj_id = u.obj_id;
-                        int blk_idx = u.obj_offset;
+                        Unit *u = it; // 当前读取的单元
+                        int obj_id = u->obj_id;
+                        int blk_idx = u->obj_offset;
                         auto obj_it = objects.find(obj_id);
                         if (obj_it != objects.end()) {
                             Object *obj = obj_it->second;
