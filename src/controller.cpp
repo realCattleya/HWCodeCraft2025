@@ -62,6 +62,8 @@ void StorageController::timestamp_align(){
     current_time_interval = current_time / FRE_PER_SLICING;
 
     // 删除所有过期请求
+    // 注意：所有对ReadRequest删除的操作都在这里完成，别的地方不要删否则会导致剩下的无法释放
+    //      如果request对应的object被删了就把target设置为nullptr
     while (true)
     {
         auto it = requests.find(last_not_expire_req_id);
@@ -70,7 +72,7 @@ void StorageController::timestamp_align(){
             if (it->second->expire_time < current_time)
             {
                 auto req = it->second;
-                if (req->target->active_requests.find(req) != req->target->active_requests.end()) {
+                if (req->target != nullptr && req->target->active_requests.find(req) != req->target->active_requests.end()) {
                     req->target->active_requests.erase(req);
                     req->target->invalid_requests.push_back(req->req_id);
                 }
@@ -105,14 +107,14 @@ vector<int> StorageController::handle_delete(const vector<int>& obj_ids){
         }
         // 取消对应的读取请求
         for(auto req : it->second->active_requests) {
+            req->target = nullptr;
             aborted.push_back(req->req_id);
-            requests.erase(req->req_id);
         }
         for(int req_id : it->second->invalid_requests) {
             aborted.push_back(req_id);
-            requests.erase(req_id);
         }
         objects.erase(it);
+        delete it->second;
     }
     return aborted;
 }
@@ -261,13 +263,10 @@ vector<string> StorageController::generate_disk_actions() {
                     bool needed = false;
                     // 检查该对象是否有活跃请求且该块还未读取
                     for (auto req : obj_it->second->active_requests) {
-                        // auto req_it = requests.find(req_id);
-                        // if (req_it != requests.end()){
-                            if (!req->block_read[u.obj_offset]) {
-                                needed = true;
-                                break;
-                            }
-                        // }
+                        if (!req->block_read[u.obj_offset]) {
+                            needed = true;
+                            break;
+                        }
                     }
                     if (needed) break;
                 }
@@ -312,25 +311,21 @@ vector<string> StorageController::generate_disk_actions() {
                             Object *obj = obj_it->second;
                             // 遍历所有活跃该对象的读请求，更新增量计数器
                             for (auto req : obj->active_requests) {
-                                // auto req_it = requests.find(req_id);
-                                // if (req_it != requests.end()){
-                                    // ReadRequest *req = req_it->second;
-                                    // 如果该块第一次被读到，则更新计数器
-                                    if (!req->block_read[blk_idx]) {
-                                        req->block_read[blk_idx] = true;
-                                        req->unique_blocks_read++;
+                                // 如果该块第一次被读到，则更新计数器
+                                if (!req->block_read[blk_idx]) {
+                                    req->block_read[blk_idx] = true;
+                                    req->unique_blocks_read++;
+                                }
+                                // 检查是否完成
+                                auto obj_it = objects.find(req->obj_id);
+                                if (obj_it != objects.end()) {
+                                    Object *obj = obj_it->second;
+                                    if (req->unique_blocks_read >= obj->size) {
+                                        pending_completed_requests.insert(req);
                                     }
-                                    // 检查是否完成
-                                    auto obj_it = objects.find(req->obj_id);
-                                    if (obj_it != objects.end()) {
-                                        Object *obj = obj_it->second;
-                                        if (req->unique_blocks_read >= obj->size) {
-                                            pending_completed_requests.insert(req);
-                                        }
-                                    }
-                                    // 仍然保留原有 read_blocks 记录（如果有其他用途）
-                                    req->read_blocks[disk->id].insert(blk_idx);
-                                // }
+                                }
+                                // 仍然保留原有 read_blocks 记录（如果有其他用途）
+                                req->read_blocks[disk->id].insert(blk_idx);
                             }
                         }
                     } else {
@@ -368,21 +363,16 @@ vector<string> StorageController::generate_disk_actions() {
 vector<int> StorageController::check_completed_requests() {
     vector<int> completed;
     for (auto req : pending_completed_requests) {
-        // auto req_it = requests.find(req_id);
-        // if (req_it == requests.end()) continue; // 请求已被处理或取消
-
-        // ReadRequest* req = req_it->second;
+        req->target = nullptr;
         auto obj_it = objects.find(req->obj_id);
         if (obj_it == objects.end()) {
             // 对象已删除，标记为完成
             completed.push_back(req->req_id);
-            requests.erase(req->req_id);
         } else {
             Object *obj = obj_it->second;
             if (req->unique_blocks_read >= obj->size) {
                 completed.push_back(req->req_id);
                 obj->active_requests.erase(req);
-                requests.erase(req->req_id);
             }
         }
     }
