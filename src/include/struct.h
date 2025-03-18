@@ -6,6 +6,8 @@
 #include <string>
 #include <iostream>
 
+struct ReadRequest;
+
 struct Unit {
     int unit_id;
     int obj_id;
@@ -84,7 +86,7 @@ struct Object {
     int tag;
     bool is_delete;
     std::vector<ObjectReplica> replicas;
-    std::unordered_set<int> active_requests;
+    std::unordered_set<ReadRequest *> active_requests;
     std::vector<int> invalid_requests;
 
     Object(){}
