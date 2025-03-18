@@ -13,6 +13,7 @@ class StorageController {
         std::unordered_set<int> pending_completed_requests; // 跟踪待完成的请求
         int current_time = 0;
         int current_time_interval = 0; // 记录当前的时间区间
+        int last_not_expire_req_id = 1;
     
         // pre-process data
         std::vector<std::vector<int>> fre_del;

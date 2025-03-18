@@ -62,22 +62,28 @@ void StorageController::timestamp_align(){
     current_time_interval = current_time / FRE_PER_SLICING;
 
     // 删除所有过期请求
-    auto it = requests.begin();
-    while (it != requests.end())
+    while (true)
     {
-        auto req = it->second;
-        if (req->expire_time <= current_time) {
-            if (req->target->active_requests.find(req->req_id) != req->target->active_requests.end()) {
-                req->target->active_requests.erase(req->req_id);
-                req->target->invalid_requests.push_back(req->req_id);
+        auto it = requests.find(last_not_expire_req_id);
+        if (it != requests.end())
+        {
+            if (it->second->expire_time <= current_time)
+            {
+                auto req = it->second;
+                if (req->target->active_requests.find(req->req_id) != req->target->active_requests.end()) {
+                    req->target->active_requests.erase(req->req_id);
+                    req->target->invalid_requests.push_back(req->req_id);
+                }
+                last_not_expire_req_id += 1;
+            } else {
+                break;
             }
-            
-            it = requests.erase(it);
         } else {
-            it++;
+            break;
         }
     }
     
+
 
     cout << "TIMESTAMP " << current_time << endl;
     cout.flush();
