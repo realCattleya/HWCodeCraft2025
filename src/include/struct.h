@@ -4,77 +4,173 @@
 #include <unordered_set>
 #include <vector>
 #include <string>
-#include <utility>
+#include <iostream>
+#include <algorithm>
 
-typedef struct Unit_ {
+struct ReadRequest;
+
+struct Unit {
     int unit_id;
     int obj_id;
     int obj_offset;
-} Unit;
+};
 
-typedef struct Disk_ {
+typedef struct Bound_ {
+    int lower;
+    int upper;
+    bool is_reverse;
+    Bound_(){}
+    Bound_(int lower,int upper, bool is_reverse) :
+    lower(lower), upper(upper), is_reverse(is_reverse){}
+} Bound;
+
+struct Disk {
     int id;
     int capacity;
+    int used_capcity = 0;
     int head_pos = 1;
-    int next_free_unit = 1;
     int pre_tokens;
     std::string last_action;
-    std::unordered_map<int, Unit> used_units;
+    // std::unordered_map<int, Unit *> used_units;
+    Unit *units;
+    std::unordered_map<int, Bound> tag_bounds;  // 记录每个 tag 的分区， is_reverse 表示需要从分区高位逆着放对象
     std::unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
     std::unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
-    // 新增：预规划的区域划分，键为 tag，值为 (region_start, region_end)
-    std::unordered_map<int, std::pair<int, int>> tag_region;
 
-    Disk_(){}
-    Disk_(int id, int v) : id(id), capacity(v) {}
+    // Disk(){}
+    Disk(int id, int v) : id(id), capacity(v) {
+        units = new Unit[v + 1];
+        auto p = units;
+        for (int i = 0; i <= v; ++i) {
+            p->unit_id = i;
+            p->obj_id = -1;
+            p++;
+        }
+    }
+
+    ~Disk() {
+        delete units;
+    }
+
+    void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
+        std::sort(tags_size_sum.begin(), tags_size_sum.end(), 
+        [](const std::pair<int, long long>& a, const std::pair<int, long long>& b) {
+            return a.second > b.second; // 降序排序
+        });
+        long long total = 0;
+        int idx = 0;
+        int M = tags_size_sum.size();
+        std::vector<long long> tmp;
+        // M % 2 == 1 时没考虑， 出BUG了记得排查（
+        for(idx=0;idx<M/2;idx++){
+            total += tags_size_sum[idx].second + tags_size_sum[M-idx-1].second;
+            tmp.push_back(total);
+        }
+        // 前 10% 空间作为缓存区
+        int last_bound = int(capacity*0.1);
+        tag_bounds[0] = Bound(0,int(capacity*0.1),false);
+        for(idx=0;idx<M/2;idx++){
+            int bound = int(double(tmp[idx])/double(total)*0.9*double(capacity)+capacity*0.1);
+            tag_bounds[tags_size_sum[idx].first] = Bound(last_bound+1,bound,false);
+            tag_bounds[tags_size_sum[M-idx-1].first] = Bound(last_bound+1,bound,true);
+            last_bound = bound;
+        }
+    }
+
+    std::vector<int> next_free_unit(int size, int tag){
+        std::vector<int> free_units;
+        bool is_reverse = tag_bounds[tag].is_reverse;
+        if(is_reverse){
+            for(int unit_id = tag_bounds[tag].upper; unit_id >= tag_bounds[tag].lower ; --unit_id){
+                // 找到空位置
+                if(units[unit_id].obj_id == -1){
+                    free_units.push_back(unit_id);
+                }
+                if(free_units.size() == size) break;
+            }
+        } else {
+            for(int unit_id = tag_bounds[tag].lower; unit_id <= tag_bounds[tag].upper ; ++unit_id){
+                // 找到空位置
+                if(units[unit_id].obj_id == -1){
+                    free_units.push_back(unit_id);
+                }
+                if(free_units.size() == size) break;
+            }
+        }
+        // 区间内没有足够的空位置,开始找位置塞，从缓存区开始找（unit_id=1）
+        if(free_units.size() < size) {
+            free_units.clear();
+            for(int unit_id = 1; unit_id <= capacity; ++unit_id){
+                if(units[unit_id].obj_id == -1){
+                    free_units.push_back(unit_id);
+                }
+                if(free_units.size() == size) break;
+            }
+        }
+        if(free_units.size() < size) {
+            std::cerr << "write obj failed!" << std::endl;
+            exit(1);
+        }
+        return free_units;
+    }
+
+
     void insert(int unit_id, int obj_id, int obj_offset, int tag) {
-        Unit unit = {unit_id, obj_id, obj_offset};
-        used_units[unit_id] = unit;
-        tag_last_allocated[tag] = unit_id;  
+        auto unit = units + unit_id;
+        unit->obj_id = obj_id;
+        unit->obj_offset = obj_offset;
+        tag_last_allocated[tag] = unit_id;
+        used_capcity += 1;
     }
     void erase(int unit_id) {
-        used_units.erase(unit_id);
+        used_capcity -= 1;
+        units[unit_id].obj_id = -1;
     }
-} Disk;
+};
 
-typedef struct ObjectReplica_ {
+struct ObjectReplica {
     int disk_id;
     std::vector<int> units;
 
-    ObjectReplica_(){}
-    ObjectReplica_(int disk_id, std::vector<int> units) : disk_id(disk_id), units(units) {}
-} ObjectReplica;
+    ObjectReplica(){}
+    ObjectReplica(int disk_id, std::vector<int> units) : disk_id(disk_id), units(units) {}
+};
 
-typedef struct Object_ {
+struct Object {
     int id;
     int size;
     int tag;
     bool is_delete;
     std::vector<ObjectReplica> replicas;
-    std::unordered_set<int> active_requests;
+    std::unordered_set<ReadRequest *> active_requests;
+    std::vector<int> invalid_requests;
 
-    Object_(){}
-    Object_(int id, int size, int tag) : id(id), size(size), tag(tag), is_delete(false) {}
+    Object(){}
+    Object(int id, int size, int tag) : id(id), size(size), tag(tag), is_delete(false) {}
     void replica_allocate(int disk_id, std::vector<int> unit_ids){
         ObjectReplica rep(disk_id,unit_ids);
         replicas.push_back(std::move(rep));
     }
-} Object;
+};
 
-typedef struct ReadRequest_ {
+struct ReadRequest {
     int req_id;
     int obj_id;
     int start_time;
+    int expire_time;
     bool isdone;
     std::unordered_map<int, std::unordered_set<int>> read_blocks; // 原有记录，每个磁盘读到的块
     std::vector<bool> block_read; // 每个对象块是否被读到，大小为对象块数，初始为 false
     int unique_blocks_read = 0; // 已读到的唯一块数量
+
+    Object *target;
     
-    ReadRequest_(){}
-    ReadRequest_(int req_id, int start_time, Object& obj) : req_id(req_id), start_time(start_time){
-        obj_id = obj.id;
+    ReadRequest(){}
+    ReadRequest(int req_id, int start_time, Object *obj) : req_id(req_id), start_time(start_time), target(obj) {
+        obj_id = obj->id;
         isdone = false;
-        block_read.assign(obj.size, false);
+        block_read.assign(obj->size, false);
         unique_blocks_read = 0;
+        expire_time = start_time + 105;
     }
-}ReadRequest;
+};

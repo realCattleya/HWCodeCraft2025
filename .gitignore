@@ -4,3 +4,8 @@ test/*
 *.exe
 CMakeLists*
 *vscode
+*.zip
+
+code_craft*
+CMakeFiles/
+build*/
