@@ -235,19 +235,17 @@ void StorageController::process_read_request(int req_id, int obj_id) {
     requests[req_id] = req;
     obj_it->second->active_requests.insert(req);
 }
-    
-
 
 vector<string> StorageController::generate_disk_actions() {
     vector<string> actions;
     actions.reserve(disks.size());
-    for (auto disk : disks) {
+    for (auto &disk : disks) {
         
         int tokens = G; 
         string act_str;
         act_str.reserve(64); // 预估动作串长度，减少扩容
         
-        // 判断是否采用 Jump 策略（仅在时间片初始允许）
+        // --- Jump 策略 ---
         int jump_target = -1;
         const int search_limit = G; // 向前搜索上限
         int steps = 0;
@@ -283,79 +281,104 @@ vector<string> StorageController::generate_disk_actions() {
             disk->head_pos = jump_target;
             disk->pre_tokens = 0;
             actions.push_back(move(act_str));
-        } else {
-        
-            // 如果上一个时间片有 read 动作，则根据其令牌消耗计算首次 read 消耗
-            int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;
-            
-            while (tokens > 0) {
-                int pos = disk->head_pos;
-                // auto it = disk->used_units.find(pos);
-                Unit *it = disk->units + pos;
-                if (it->obj_id != -1) {
-                    // 当前有对象块，计划执行 Read 操作
-                    int cost = (last_read_cost == 0) ? 64 : max(16, int(ceil(float(last_read_cost) * 0.8) ));
-                    if (tokens >= cost) {
-                        act_str.push_back('r');
-                        tokens -= cost;
-                        last_read_cost = cost;  // 更新当前 Read 消耗
-                        
-                        Unit *u = it; // 当前读取的单元
-                        int obj_id = u->obj_id;
-                        int blk_idx = u->obj_offset;
-                        auto obj_it = objects.find(obj_id);
-                        if (obj_it != objects.end()) {
-                            Object *obj = obj_it->second;
-                            // 遍历所有活跃该对象的读请求，更新增量计数器
-                            for (auto req : obj->active_requests) {
-                                // 如果该块第一次被读到，则更新计数器
-                                if (!req->block_read[blk_idx]) {
-                                    req->block_read[blk_idx] = true;
-                                    req->unique_blocks_read++;
-                                }
-                                // 检查是否完成
-                                auto obj_it = objects.find(req->obj_id);
-                                if (obj_it != objects.end()) {
-                                    Object *obj = obj_it->second;
-                                    if (req->unique_blocks_read >= obj->size) {
-                                        pending_completed_requests.insert(req);
-                                    }
-                                }
-                                // 仍然保留原有 read_blocks 记录（如果有其他用途）
-                                req->read_blocks[disk->id].insert(blk_idx);
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                } else {
-                    // 没有对象块则执行 Pass 动作，消耗 1 个令牌
-                    if (tokens >= 1) {
-                        act_str.push_back('p');
-                        tokens -= 1;
-                        last_read_cost = 0;  // 重置连续 Read 消耗记录
-                    } else {
-                        break;
-                    }
-                }
-                // 更新磁头位置（环形排列）
-                disk->head_pos++;
-                if(disk->head_pos>disk->capacity) {
-                    disk->head_pos = 1;
+            continue;
+        }
+
+        // --- DP PR 策略 ---
+        vector<double> dp(G + 1, -1e9); // 初始化 DP 数组，最大令牌数为 G，初始状态为负无穷
+        vector<string> action_types(G + 1, "");  // 用来存储每个令牌数的操作类型（Read/Pass）
+        vector<int> pre_read_costs(G + 1, 0);  // 用来存储每个令牌数的 Read 操作消耗
+        dp[G] = 0; // 初始状态下，消耗 0 个令牌时的得分为 0
+        int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;  // 上一个时间片的 `Read` 消耗
+        pre_read_costs[G] = last_read_cost;  // 初始化最大令牌数的 Read 消耗
+
+        // 状态转移：遍历每个令牌数 tokens_left
+        for (int tokens_left = G; tokens_left > 0; tokens_left--) {  // 从 G 到 0 反向更新 DP
+            // Pass 操作（不增加得分，只消耗 1 个令牌）
+            if (tokens_left >= 0 && dp[tokens_left] != -1e9) {
+                dp[tokens_left - 1] = max(dp[tokens_left] + 0, dp[tokens_left - 1]);
+                if (dp[tokens_left] + 0 == dp[tokens_left - 1]) {
+                    action_types[tokens_left - 1] = "p";  // 记录 Pass 操作
+                    pre_read_costs[tokens_left - 1] = 0;
                 }
             }
-            act_str.push_back('#');
-            // 如果本时间片最后一个动作为 Read，则记录其令牌消耗；否则置 0
-            if (act_str.size() > 1 && act_str[act_str.size()-2] == 'r')
-                disk->pre_tokens = last_read_cost;
-            else
-                disk->pre_tokens = 0;
-            actions.push_back(move(act_str));
+            // Read 操作（如果当前位置有对象块，计算得分）
+            if (tokens_left >= pre_read_costs[tokens_left] && dp[tokens_left] != -1e9) {
+                Unit *it = disk->units + disk->head_pos;
+                if (it->obj_id != -1) {
+                    int obj_id = it->obj_id;
+                    Object* obj = objects[obj_id];
+                    int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+                    dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, current_time), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
+                    if (dp[tokens_left] + compute_score(obj, current_time) == dp[tokens_left - cost]) {
+                        action_types[tokens_left - cost] = "r";  // 记录 Read 操作
+                        pre_read_costs[tokens_left - cost] = cost;
+                    }
+                } else {
+                    int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+                    dp[tokens_left - cost] = max(dp[tokens_left] + 0, dp[tokens_left - cost]);
+                    if (dp[tokens_left] + 0 == dp[tokens_left - cost]) {
+                        action_types[tokens_left - cost] = "r";  // 无对象块时，依然记录 Read 操作
+                        pre_read_costs[tokens_left - cost] = cost;
+                    }
+                }
+            }
         }
+
+        // 选择最大得分，并反向回溯生成操作路径
+        int tokens_left = 0;  // 从 0 令牌数开始回溯
+
+        // 用于存储所有操作
+        vector<string> temp_actions;
+        bool found_read = false;
+
+        while (tokens_left < G && action_types[tokens_left] != "") {
+            if (action_types[tokens_left] == "r") {
+                // 记录 Read 操作
+                act_str = "r";
+                temp_actions.push_back(act_str);
+                if (!found_read){
+                    disk->pre_tokens = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+                }
+                found_read = true;  // 标记找到第一个 Read
+            } else if (action_types[tokens_left] == "p") {
+                // 记录 Pass 操作
+                act_str = "p";
+                if (found_read) {
+                    temp_actions.push_back(act_str);
+                }
+            }
+
+            if (action_types[tokens_left] == "r") {
+                last_read_cost = pre_read_costs[tokens_left];  // 记录最后一个 Read 消耗
+                tokens_left += last_read_cost;  // 减少令牌消耗
+            } else if (action_types[tokens_left] == "p") {
+                tokens_left += 1;  // Pass 操作消耗 1 个令牌
+            }
+        }
+
+        // 如果没有找到 Read 操作，则强制将最后一个操作设为 Read
+        if (!found_read) {
+            act_str = "r";
+            temp_actions.push_back(act_str);
+            last_read_cost = (disk->pre_tokens == 0) ? 64 : max(16, int(ceil(float(disk->pre_tokens) * 0.8) ));
+            disk->pre_tokens = last_read_cost;
+        }
+
+        // 反转操作路径以保证顺序
+        reverse(temp_actions.begin(), temp_actions.end());
+        actions.insert(actions.end(), temp_actions.begin(), temp_actions.end());
+
+        disk->head_pos += actions.size();
+        if (disk->head_pos > disk->capacity) {
+            disk->head_pos = 1;
+        }
+
+        act_str.push_back('#');
+        actions.push_back(move(act_str));
     }
     return actions;
-}
-    
+}    
     
 vector<int> StorageController::check_completed_requests() {
     vector<int> completed;
