@@ -35,14 +35,19 @@ void StorageController::pre_process(){
     int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
 
     // 逐个时间段计算每个 tag 的热度
-    vector<long long> tags_size_sum;
+    vector<pair<int,long long>> tags_size_sum;
     for (int tag = 1; tag <= M; ++tag) {
-        tags_size_sum.push_back(fre_write[tag - 1][0]);
         for (int t = 0; t < time_intervals; ++t) {
             long long total_write = fre_write[tag - 1][t];
             long long total_read = fre_read[tag - 1][t];
             // 计算热度：读取量 / (写入量 + 1)，防止除零
             tag_hotness[tag][t] = (double)total_read / (total_write + 1);
+            if(t==0){
+                pair<int,long long> p(tag,fre_write[tag - 1][0]-fre_del[tag-1][0]);
+                tags_size_sum.push_back(p);
+                continue;
+            }
+            tags_size_sum[tag-1].second += fre_write[tag - 1][t]-fre_del[tag-1][t];
         }
     }
     for (Disk* disk : disks){
@@ -181,20 +186,12 @@ bool StorageController::write_object(int id, int size, int tag) {
     for (int i = 0; i < REP_NUM; ++i) {
         Disk* target_disk = candidates[i];
         std::vector<int> target_units;
-        int start = target_disk->next_free_unit[tag];
-
-        for(int j = 0; j < size; ++j){
-            while (target_disk->units[start].obj_id != -1){
-                ++start;
-                if(start > target_disk->capacity) start = 1;
-            }
-            target_units.push_back(start);
-            target_disk->insert(start, id, j, tag);
-            ++start;
-            if (start > target_disk->capacity) start = 1;
-        }
-
+        target_units = target_disk->next_free_unit(size,tag);
+        sort(target_units.begin(),target_units.end());
         obj->replica_allocate(target_disk->id, target_units);
+        for(int j = 0; j < size; ++j){
+            target_disk->insert(target_units[j], id, j, tag);
+        }
     }
 
     objects[id] = obj;

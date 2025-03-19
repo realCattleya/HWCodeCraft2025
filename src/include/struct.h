@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <algorithm>
 
 struct ReadRequest;
 
@@ -14,16 +15,25 @@ struct Unit {
     int obj_offset;
 };
 
+typedef struct Bound_ {
+    int lower;
+    int upper;
+    bool is_reverse;
+    Bound_(){}
+    Bound_(int lower,int upper, bool is_reverse) :
+    lower(lower), upper(upper), is_reverse(is_reverse){}
+} Bound;
+
 struct Disk {
     int id;
     int capacity;
     int used_capcity = 0;
     int head_pos = 1;
-    std::vector<int> next_free_unit;
     int pre_tokens;
     std::string last_action;
     // std::unordered_map<int, Unit *> used_units;
     Unit *units;
+    std::unordered_map<int, Bound> tag_bounds;  // 记录每个 tag 的分区， is_reverse 表示需要从分区高位逆着放对象
     std::unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
     std::unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
 
@@ -42,22 +52,68 @@ struct Disk {
         delete units;
     }
 
-    void partition_units(std::vector<long long> tags_size_sum){
+    void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
+        std::sort(tags_size_sum.begin(), tags_size_sum.end(), 
+        [](const std::pair<int, long long>& a, const std::pair<int, long long>& b) {
+            return a.second > b.second; // 降序排序
+        });
         long long total = 0;
-        std::vector<int> partition;
-        for(long long size : tags_size_sum){
-            total += size;
+        int idx = 0;
+        int M = tags_size_sum.size();
+        std::vector<long long> tmp;
+        // M % 2 == 1 时没考虑， 出BUG了记得排查（
+        for(idx=0;idx<M/2;idx++){
+            total += tags_size_sum[idx].second + tags_size_sum[M-idx-1].second;
+            tmp.push_back(total);
         }
-        for(long long size : tags_size_sum){
-            partition.push_back(int(double(size)/double(total)*double(capacity)));
-        }
-        next_free_unit.push_back(0); // tag 从 1 开始数
-        int start = 1;
-        for(int p : partition){
-            next_free_unit.push_back(start);
-            start+=p;
+        // 前 10% 空间作为缓存区
+        int last_bound = int(capacity*0.1);
+        tag_bounds[0] = Bound(0,int(capacity*0.1),false);
+        for(idx=0;idx<M/2;idx++){
+            int bound = int(double(tmp[idx])/double(total)*0.9*double(capacity)+capacity*0.1);
+            tag_bounds[tags_size_sum[idx].first] = Bound(last_bound+1,bound,false);
+            tag_bounds[tags_size_sum[M-idx-1].first] = Bound(last_bound+1,bound,true);
+            last_bound = bound;
         }
     }
+
+    std::vector<int> next_free_unit(int size, int tag){
+        std::vector<int> free_units;
+        bool is_reverse = tag_bounds[tag].is_reverse;
+        if(is_reverse){
+            for(int unit_id = tag_bounds[tag].upper; unit_id >= tag_bounds[tag].lower ; --unit_id){
+                // 找到空位置
+                if(units[unit_id].obj_id == -1){
+                    free_units.push_back(unit_id);
+                }
+                if(free_units.size() == size) break;
+            }
+        } else {
+            for(int unit_id = tag_bounds[tag].lower; unit_id <= tag_bounds[tag].upper ; ++unit_id){
+                // 找到空位置
+                if(units[unit_id].obj_id == -1){
+                    free_units.push_back(unit_id);
+                }
+                if(free_units.size() == size) break;
+            }
+        }
+        // 区间内没有足够的空位置,开始找位置塞，从缓存区开始找（unit_id=1）
+        if(free_units.size() < size) {
+            free_units.clear();
+            for(int unit_id = 1; unit_id <= capacity; ++unit_id){
+                if(units[unit_id].obj_id == -1){
+                    free_units.push_back(unit_id);
+                }
+                if(free_units.size() == size) break;
+            }
+        }
+        if(free_units.size() < size) {
+            std::cerr << "write obj failed!" << std::endl;
+            exit(1);
+        }
+        return free_units;
+    }
+
 
     void insert(int unit_id, int obj_id, int obj_offset, int tag) {
         auto unit = units + unit_id;
