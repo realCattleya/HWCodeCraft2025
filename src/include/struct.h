@@ -192,6 +192,8 @@ struct Object {
         ObjectReplica rep(disk_id,unit_ids);
         replicas.push_back(std::move(rep));
     }
+
+    float get_score(int obj_offset, int time);
 };
 
 struct ReadRequest {
@@ -213,5 +215,23 @@ struct ReadRequest {
         block_read.assign(obj->size, false);
         unique_blocks_read = 0;
         expire_time = start_time + 105;
+    }
+
+    float get_score(int obj_offset, int time) {
+        if (block_read[obj_offset]) {
+            return 0;
+        } else {
+            float score;
+            int delta_time = time - start_time;
+            if (0 <= delta_time && delta_time <= 10) {
+                score = 1 - 0.005 * delta_time;
+            } else if (delta_time <= 105) {
+                score = 1.05 - 0.01 * delta_time;
+            } else {
+                score = 0;
+            }
+            return score / target->size * (target->size + 1);
+        }
+        
     }
 };
