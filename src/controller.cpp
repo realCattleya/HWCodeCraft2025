@@ -13,7 +13,7 @@ StorageController::StorageController(int T, int M, int N, int V, int G,
 : T(T), M(M), N(N), V(V), G(G),
 fre_del(del), fre_write(write), fre_read(read) {
     for(int i=1; i<=N; ++i){
-        disks.push_back(new Disk(i, V));
+        disks.push_back(new Disk(i, V, this));
     }
 
     int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;

@@ -6,8 +6,10 @@
 #include <string>
 #include <iostream>
 #include <algorithm>
+#include <cassert>
 
 struct ReadRequest;
+class StorageController;
 
 struct Unit {
     int unit_id;
@@ -25,11 +27,18 @@ typedef struct Bound_ {
 } Bound;
 
 struct Disk {
+
+    StorageController * _controller;
+    std::string _actions;
+    bool _is_jmp;
+
     int id;
     int capacity;
     int used_capcity = 0;
     int head_pos = 1;
     int pre_tokens;
+    int left_tokens;
+    int last_read_cost = 0;
     std::string last_action;
     // std::unordered_map<int, Unit *> used_units;
     Unit *units;
@@ -37,8 +46,17 @@ struct Disk {
     std::unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
     std::unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
 
+    // 每个时间片开始时调用
+    void op_start();
+    void op_jump(int offset); // 跳转操作
+    void op_read(); // 读操作
+    void op_pass(); // 跳过操作
+    void op_finish();
+    // 每个磁盘操作结束时调用
+    void _step();
+
     // Disk(){}
-    Disk(int id, int v) : id(id), capacity(v) {
+    Disk(int id, int v, StorageController *c) : id(id), capacity(v), _controller(c) {
         units = new Unit[v + 1];
         auto p = units;
         for (int i = 0; i <= v; ++i) {
@@ -51,6 +69,8 @@ struct Disk {
     ~Disk() {
         delete units;
     }
+
+    
 
     void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
         std::sort(tags_size_sum.begin(), tags_size_sum.end(), 

@@ -39,4 +39,6 @@ class StorageController {
         std::vector<std::string> generate_disk_actions(); 
         std::vector<int> check_completed_requests(); 
         void read_action();
+
+        int get_available_tokens() {return G;};
     };
