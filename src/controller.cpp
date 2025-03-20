@@ -251,10 +251,10 @@ vector<string> StorageController::generate_disk_actions() {
         
         // --- Jump 策略 ---
         int jump_target = -1;
-        const int search_limit = G; // 向前搜索上限
+        const int search_limit = G / 2; // 向前搜索上限
         int steps = 0;
         int pos = disk->head_pos;
-        while (steps <= search_limit) {
+        while (steps <= G + 100) {
             if (disk->units[pos].obj_id != -1) {
                 Unit &u = disk->units[pos];
                 auto obj_it = objects.find(u.obj_id);
@@ -275,9 +275,10 @@ vector<string> StorageController::generate_disk_actions() {
             steps++;
         }
         // 如果空闲区间超过阈值（例如G个单位），则采用 Jump
-        if (steps >= G && steps <= search_limit && tokens == G) {
+        if (steps >= search_limit && tokens == G) {
             jump_target = pos;
         }
+        // jump_target = pos;
         if(jump_target != -1) {
             act_str = "j " + to_string(jump_target);
             tokens = 0; // Jump后本时间片内不再有动作
