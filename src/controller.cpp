@@ -236,6 +236,10 @@ void StorageController::process_read_request(int req_id, int obj_id) {
     obj_it->second->active_requests.insert(req);
 }
 
+float compute_score(Object *obj, int offset, int ts) {
+    return obj->get_score(offset, ts);   
+}
+
 vector<string> StorageController::generate_disk_actions() {
     vector<string> actions;
     actions.reserve(disks.size());
@@ -309,17 +313,21 @@ vector<string> StorageController::generate_disk_actions() {
                     int obj_id = it->obj_id;
                     Object* obj = objects[obj_id];
                     int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
-                    dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, current_time), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
-                    if (dp[tokens_left] + compute_score(obj, current_time) == dp[tokens_left - cost]) {
-                        action_types[tokens_left - cost] = "r";  // 记录 Read 操作
-                        pre_read_costs[tokens_left - cost] = cost;
+                    if (tokens_left - cost >= 0) {
+                        dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
+                        if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time) == dp[tokens_left - cost]) {
+                            action_types[tokens_left - cost] = "r";  // 记录 Read 操作
+                            pre_read_costs[tokens_left - cost] = cost;
+                        }
                     }
                 } else {
                     int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
-                    dp[tokens_left - cost] = max(dp[tokens_left] + 0, dp[tokens_left - cost]);
-                    if (dp[tokens_left] + 0 == dp[tokens_left - cost]) {
-                        action_types[tokens_left - cost] = "r";  // 无对象块时，依然记录 Read 操作
-                        pre_read_costs[tokens_left - cost] = cost;
+                    if (tokens_left - cost >= 0) {
+                        dp[tokens_left - cost] = max(dp[tokens_left] + 0, dp[tokens_left - cost]);
+                        if (dp[tokens_left] + 0 == dp[tokens_left - cost]) {
+                            action_types[tokens_left - cost] = "r";  // 无对象块时，依然记录 Read 操作
+                            pre_read_costs[tokens_left - cost] = cost;
+                        }
                     }
                 }
             }
@@ -367,15 +375,51 @@ vector<string> StorageController::generate_disk_actions() {
 
         // 反转操作路径以保证顺序
         reverse(temp_actions.begin(), temp_actions.end());
-        actions.insert(actions.end(), temp_actions.begin(), temp_actions.end());
+        
+        // actions.insert(actions.end(), temp_actions.begin(), temp_actions.end());
 
-        disk->head_pos += actions.size();
-        if (disk->head_pos > disk->capacity) {
-            disk->head_pos = 1;
+        // 检查完成的请求
+        for (const auto &s: temp_actions) {
+            if (s == "r") {
+                Unit &u = disk->units[disk->head_pos];
+                if (u.obj_id != -1)
+                {
+                    Object *obj = objects[u.obj_id];
+                    for (auto it = obj->active_requests.begin(); it != obj->active_requests.end();) {
+                        ReadRequest *rq = *it;
+                        if (!rq->block_read[u.obj_offset]) {
+                            rq->block_read[u.obj_offset] = true;
+                            rq->unique_blocks_read += 1;
+                        }
+                        if (rq->unique_blocks_read == obj->size) {
+                            rq->isdone = true;
+                            pending_completed_requests.insert(rq);
+                            it = obj->active_requests.erase(it);
+                        } else {
+                            it ++;
+                        }
+                        
+                    }
+                    
+                }
+            }
+            disk->head_pos += 1;
+            if (disk->head_pos > disk->capacity) {
+                disk->head_pos = 1;
+            }
         }
+        // disk->head_pos += temp_actions.size();
+        // if (disk->head_pos > disk->capacity) {
+        //     disk->head_pos = 1;
+        // }
 
-        act_str.push_back('#');
-        actions.push_back(move(act_str));
+        temp_actions.push_back("#");
+        // FIXME: 检查一下输出这里
+        std::string act = "";
+        for (const auto& s: temp_actions) {
+            act += s;
+        }
+        actions.push_back(move(act));
     }
     return actions;
 }    
