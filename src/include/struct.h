@@ -189,7 +189,7 @@ struct ReadRequest {
             } else {
                 score = 0;
             }
-            return score / target->size;
+            return score / target->size * (target->size + 1);
         }
         
     }
