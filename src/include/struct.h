@@ -32,6 +32,7 @@ struct Disk {
     int head_pos = 1;
     int pre_tokens;
     int curr_tag_to_read;
+    int used_units_cnt = 0;
     std::string last_action;
     // std::unordered_map<int, Unit *> used_units;
     Unit *units;

@@ -147,6 +147,7 @@ vector<int> StorageController::handle_delete(const vector<int>& obj_ids){
             Disk* disk = disks[rep.disk_id-1];
             for (int u : rep.units) {
                 disk->erase(u);
+                disk->used_units_cnt -= 1;
             }
         }
         // 取消对应的读取请求
@@ -234,6 +235,7 @@ bool StorageController::write_object(int id, int size, int tag) {
         for(int j = 0; j < size; ++j){
             target_disk->insert(target_units[j], id, j, tag);
         }
+        target_disk->used_units_cnt += target_units.size();
     }
 
     objects[id] = obj;
@@ -285,7 +287,11 @@ float compute_score(Object *obj, int offset, int ts) {
 vector<string> StorageController::generate_disk_actions() {
     vector<string> actions;
     actions.reserve(disks.size());
+
+
+
     for (auto &disk : disks) {
+
         
         int tokens = G; 
         string act_str;
@@ -296,6 +302,7 @@ vector<string> StorageController::generate_disk_actions() {
         const int search_limit = G / 2; // 向前搜索上限
         int steps = 0;
         int pos = disk->head_pos;
+        int needed_cnt = 0;
         while (steps <= G + 100) {
             if (disk->units[pos].obj_id != -1) {
                 Unit &u = disk->units[pos];
@@ -309,23 +316,58 @@ vector<string> StorageController::generate_disk_actions() {
                             break;
                         }
                     }
-                    if (needed) break;
+                    if (needed) {
+                        needed_cnt++;
+                        //break;
+                    }
                 }
+            }
+            if(needed_cnt > JUMP_TRIGGER * G){
+                break;
             }
             pos++;
             if (pos > disk->capacity) pos = 1;
             steps++;
         }
-        // 如果空闲区间超过阈值（例如G个单位），则采用 Jump
+        // 如果需要超过G/2步才读到 JUMP_TRIGGER * G个需要读取的Obj，则采用 Jump   
         if (steps >= search_limit && tokens == G) {
             //jump_target = pos;
-            disk->curr_tag_to_read = disk->unique_hot_tags_circular_que[current_time_interval].front();
-            disk->unique_hot_tags_circular_que[current_time_interval].pop_front();
-            disk->unique_hot_tags_circular_que[current_time_interval].push_back(disk->curr_tag_to_read);
-            jump_target = disk->tag_bounds[disk->curr_tag_to_read].lower;
-            if(jump_target <=0 || jump_target > V) {
-                jump_target = 1;
+            // disk->curr_tag_to_read = disk->unique_hot_tags_circular_que[current_time_interval].front();
+            // disk->unique_hot_tags_circular_que[current_time_interval].pop_front();
+            // disk->unique_hot_tags_circular_que[current_time_interval].push_back(disk->curr_tag_to_read);
+            // jump_target = disk->tag_bounds[disk->curr_tag_to_read].lower;
+            // if(jump_target <=0 || jump_target > V) {
+            //     jump_target = 1;
+            // }
+            std::vector<float> score(disk->capacity + 1, 0);
+            float sss = 0;
+            for (int i = 1; i <= disk->capacity; ++i) {
+                if (disk->units[i].obj_id != -1) {
+                    score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+                }
             }
+            for (int i = 1; i <= WINDOW_SIZE; ++i) {
+                sss += score[i];
+            }
+            int max_pos = 1;
+            int max_score = sss;
+            for (int i = 1; i <= disk->capacity; ++i) {
+                sss -= score[i];
+                int nt = i + WINDOW_SIZE;
+                if (nt > disk->capacity) {
+                    nt -= disk->capacity;
+                }
+                sss += score[nt];
+                if (sss >= max_score) {
+                    max_pos = i + 1;
+                    max_score = sss;
+                }
+            }
+
+            if (max_pos > disk->capacity) {
+                max_pos -= disk->capacity;
+            }
+            jump_target = max_pos;
         }
         // jump_target = pos;
         if(jump_target != -1) {
