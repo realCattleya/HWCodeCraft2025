@@ -6,6 +6,7 @@
 #include <string>
 #include <iostream>
 #include <algorithm>
+#include <deque>
 
 struct ReadRequest;
 
@@ -30,15 +31,18 @@ struct Disk {
     int used_capcity = 0;
     int head_pos = 1;
     int pre_tokens;
+    int curr_tag_to_read;
     std::string last_action;
     // std::unordered_map<int, Unit *> used_units;
     Unit *units;
+    std::unordered_map<int,std::deque<int>> unique_hot_tags_circular_que; // 指示前TOPK热点区的循环队列
     std::unordered_map<int, Bound> tag_bounds;  // 记录每个 tag 的分区， is_reverse 表示需要从分区高位逆着放对象
     std::unordered_map<int, int> tag_last_allocated; // 记录每个 tag 最近一次分配的位置
     std::unordered_map<int, int> tag_continuous;     // 记录每个 tag 当前连续写入的长度
 
     // Disk(){}
     Disk(int id, int v) : id(id), capacity(v) {
+        curr_tag_to_read = -1;
         units = new Unit[v + 1];
         auto p = units;
         for (int i = 0; i <= v; ++i) {
@@ -52,7 +56,8 @@ struct Disk {
         delete units;
     }
 
-    void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
+    void pair_wise_partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
+        double buffer_rate = 0.05;
         std::sort(tags_size_sum.begin(), tags_size_sum.end(), 
         [](const std::pair<int, long long>& a, const std::pair<int, long long>& b) {
             return a.second > b.second; // 降序排序
@@ -66,15 +71,37 @@ struct Disk {
             total += tags_size_sum[idx].second + tags_size_sum[M-idx-1].second;
             tmp.push_back(total);
         }
-        // 前 10% 空间作为缓存区
-        int last_bound = int(capacity*0.1);
-        tag_bounds[0] = Bound(0,int(capacity*0.1),false);
+        // 前 buffer_rate 的空间作为缓存区
+        int last_bound = int(capacity*buffer_rate);
+        tag_bounds[0] = Bound(1,int(capacity*buffer_rate),false);
         for(idx=0;idx<M/2;idx++){
-            int bound = int(double(tmp[idx])/double(total)*0.9*double(capacity)+capacity*0.1);
+            int bound = int(double(tmp[idx])/double(total)*(1-buffer_rate)*double(capacity)+capacity*buffer_rate);
             tag_bounds[tags_size_sum[idx].first] = Bound(last_bound+1,bound,false);
             tag_bounds[tags_size_sum[M-idx-1].first] = Bound(last_bound+1,bound,true);
             last_bound = bound;
         }
+    }
+
+    // 考虑每轮大时间段开始时调整一下分区？无效
+    void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
+        double buffer_rate = 0.05;
+        long long total = 0;
+        int idx = 0;
+        int M = tags_size_sum.size();
+        std::vector<long long> tmp;
+        for(idx=0;idx<M;idx++){
+            total += tags_size_sum[idx].second;
+            tmp.push_back(total);
+        }
+        // 前 buffer_rate 的空间作为缓存区
+        int last_bound = int(capacity*buffer_rate);
+        tag_bounds[0] = Bound(1,int(capacity*buffer_rate),false);
+        for(idx=0;idx<M;idx++){
+            int bound = int(double(tmp[idx])/double(total)*(1-buffer_rate)*double(capacity)+capacity*buffer_rate);
+            tag_bounds[tags_size_sum[idx].first] = Bound(last_bound+1,bound,false);
+            last_bound = bound;
+        }
+        return;
     }
 
     std::vector<int> next_free_unit(int size, int tag){
@@ -114,6 +141,20 @@ struct Disk {
         return free_units;
     }
 
+    void hot_tags_record(std::unordered_map<int,std::deque<int>> common_deq){
+        unique_hot_tags_circular_que.clear();
+        for(auto deque : common_deq){
+            int t = deque.first;
+            unique_hot_tags_circular_que[t] = std::deque<int>(deque.second);
+            //根据磁盘id来错开同时访问的分区
+            for(int i = 0; i < id; ++i){
+                int tag = unique_hot_tags_circular_que[t].front();
+                unique_hot_tags_circular_que[t].pop_front();
+                unique_hot_tags_circular_que[t].push_back(tag);
+            }
+        } 
+        
+    }
 
     void insert(int unit_id, int obj_id, int obj_offset, int tag) {
         auto unit = units + unit_id;

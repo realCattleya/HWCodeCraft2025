@@ -22,6 +22,7 @@ class StorageController {
     
         // 新增：按时间段存储热度信息
         std::vector<std::vector<double>> tag_hotness; // tag_hotness[tag][time_interval]
+        std::unordered_map<int,std::deque<int>> hot_tags_circular_que;
         std::vector<std::vector<std::vector<int>>> latin_templates;
     
     public:

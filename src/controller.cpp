@@ -31,6 +31,25 @@ fre_del(del), fre_write(write), fre_read(read) {
     }
 }
 
+
+int topk_tag(double rate, vector<pair<int,double>> metrics){
+    double total = 0;
+    double curr = 0;
+    int topk = 0;
+    for(auto it : metrics){
+        total += it.second;
+    }
+    for(auto it : metrics){
+        curr += it.second;
+        topk++;
+        if(curr/total >= rate){
+            return topk;
+        }
+    }
+    return metrics.size()/2;
+}
+
+
 void StorageController::pre_process(){
     int time_intervals = (T + FRE_PER_SLICING - 1) / FRE_PER_SLICING;
 
@@ -50,8 +69,25 @@ void StorageController::pre_process(){
             tags_size_sum[tag-1].second += fre_write[tag - 1][t]-fre_del[tag-1][t];
         }
     }
+    // 将每个时段的前TOPK热的tag存入循环队列中，让磁头循环扫盘
+    for(int t = 0; t < time_intervals; ++t){
+        vector<pair<int,double>> hotness_to_sorted;
+        for(int tag = 1; tag <= M; ++tag){
+            hotness_to_sorted.push_back(make_pair(tag,tag_hotness[tag][t]));
+        }
+        sort(hotness_to_sorted.begin(), hotness_to_sorted.end(), [](const pair<int, double>& a, const pair<int, double>& b) {
+            return a.second > b.second; // 按照第二个元素从大到小排序
+        });
+        // 感觉不能写死，TOPK 应该是动态变化的
+        int topk = topk_tag(0.8, hotness_to_sorted);
+        for(int i = 1; i <= topk; ++i){
+            hot_tags_circular_que[t].push_back(hotness_to_sorted[i].first);
+        }
+        hot_tags_circular_que[t].push_back(0);
+    }
     for (Disk* disk : disks){
-        // 以第一个片段的写入量为划分比
+        disk->hot_tags_record(hot_tags_circular_que);
+        //disk->pair_wise_partition_units(tags_size_sum);
         disk->partition_units(tags_size_sum);
     }
     cout << "OK" << endl;
@@ -252,29 +288,11 @@ vector<string> StorageController::generate_disk_actions() {
         const int search_limit = G; // 向前搜索上限
         int steps = 0;
         int pos = disk->head_pos;
-        while (steps <= search_limit) {
-            if (disk->units[pos].obj_id != -1) {
-                Unit &u = disk->units[pos];
-                auto obj_it = objects.find(u.obj_id);
-                if (obj_it != objects.end()) {
-                    bool needed = false;
-                    // 检查该对象是否有活跃请求且该块还未读取
-                    for (auto req : obj_it->second->active_requests) {
-                        if (!req->block_read[u.obj_offset]) {
-                            needed = true;
-                            break;
-                        }
-                    }
-                    if (needed) break;
-                }
-            }
-            pos++;
-            if (pos > disk->capacity) pos = 1;
-            steps++;
-        }
-        // 如果空闲区间超过阈值（例如G个单位），则采用 Jump
-        if (steps >= G && steps <= search_limit && tokens == G) {
-            jump_target = pos;
+        if(disk->curr_tag_to_read == -1 || pos >= disk->tag_bounds[disk->curr_tag_to_read].upper){
+            disk->curr_tag_to_read = disk->unique_hot_tags_circular_que[current_time_interval].front();
+            disk->unique_hot_tags_circular_que[current_time_interval].pop_front();
+            disk->unique_hot_tags_circular_que[current_time_interval].push_back(disk->curr_tag_to_read);
+            jump_target = disk->tag_bounds[disk->curr_tag_to_read].lower;
         }
         if(jump_target != -1) {
             act_str = "j " + to_string(jump_target);
