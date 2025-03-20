@@ -243,7 +243,12 @@ float compute_score(Object *obj, int offset, int ts) {
 vector<string> StorageController::generate_disk_actions() {
     vector<string> actions;
     actions.reserve(disks.size());
+    const int window_size = 350;
+
+
+
     for (auto &disk : disks) {
+
         
         int tokens = G; 
         string act_str;
@@ -276,7 +281,35 @@ vector<string> StorageController::generate_disk_actions() {
         }
         // 如果空闲区间超过阈值（例如G个单位），则采用 Jump
         if (steps >= search_limit && tokens == G) {
-            jump_target = pos;
+            std::vector<float> score(disk->capacity + 1, 0);
+            float sss = 0;
+            for (int i = 1; i <= disk->capacity; ++i) {
+                if (disk->units[i].obj_id != -1) {
+                    score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+                }
+            }
+            for (int i = 1; i <= window_size; ++i) {
+                sss += score[i];
+            }
+            int max_pos = 1;
+            int max_score = sss;
+            for (int i = 1; i <= disk->capacity; ++i) {
+                sss -= score[i];
+                int nt = i + window_size;
+                if (nt > disk->capacity) {
+                    nt -= disk->capacity;
+                }
+                sss += score[nt];
+                if (sss >= max_score) {
+                    max_pos = i + 1;
+                    max_score = sss;
+                }
+            }
+
+            if (max_pos > disk->capacity) {
+                max_pos -= disk->capacity;
+            }
+            jump_target = max_pos;
         }
         // jump_target = pos;
         if(jump_target != -1) {
