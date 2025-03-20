@@ -360,7 +360,7 @@ vector<string> StorageController::generate_disk_actions() {
                 act_str = "r";
                 temp_actions.push_back(act_str);
                 if (!found_read){
-                    disk->pre_tokens = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+                    disk->pre_tokens = (pre_read_costs[tokens_left] == 0) ? 64 : pre_read_costs[tokens_left]; // max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
                 }
                 found_read = true;  // 标记找到第一个 Read
             } else if (action_types[tokens_left] == "p") {
