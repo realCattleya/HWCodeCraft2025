@@ -292,23 +292,29 @@ vector<string> StorageController::generate_disk_actions() {
         vector<double> dp(G + 1, -1e9); // 初始化 DP 数组，最大令牌数为 G，初始状态为负无穷
         vector<string> action_types(G + 1, "");  // 用来存储每个令牌数的操作类型（Read/Pass）
         vector<int> pre_read_costs(G + 1, 0);  // 用来存储每个令牌数的 Read 操作消耗
+        vector<int> dp_pos(G + 1, 0);  // 用来存储每个状态的磁头位置
         dp[G] = 0; // 初始状态下，消耗 0 个令牌时的得分为 0
         int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;  // 上一个时间片的 `Read` 消耗
         pre_read_costs[G] = last_read_cost;  // 初始化最大令牌数的 Read 消耗
+        dp_pos[G] = disk->head_pos;
 
         // 状态转移：遍历每个令牌数 tokens_left
         for (int tokens_left = G; tokens_left > 0; tokens_left--) {  // 从 G 到 0 反向更新 DP
             // Pass 操作（不增加得分，只消耗 1 个令牌）
-            if (tokens_left >= 0 && dp[tokens_left] != -1e9) {
+            if (tokens_left > 0 && dp[tokens_left] != -1e9) {
                 dp[tokens_left - 1] = max(dp[tokens_left] + 0, dp[tokens_left - 1]);
                 if (dp[tokens_left] + 0 == dp[tokens_left - 1]) {
                     action_types[tokens_left - 1] = "p";  // 记录 Pass 操作
                     pre_read_costs[tokens_left - 1] = 0;
+                    dp_pos[tokens_left - 1] = dp_pos[tokens_left] + 1;
+                    if (dp_pos[tokens_left - 1] > disk->capacity) {
+                        dp_pos[tokens_left - 1] = 1;
+                    }
                 }
             }
             // Read 操作（如果当前位置有对象块，计算得分）
             if (tokens_left >= pre_read_costs[tokens_left] && dp[tokens_left] != -1e9) {
-                Unit *it = disk->units + disk->head_pos;
+                Unit *it = disk->units + dp_pos[tokens_left];
                 if (it->obj_id != -1) {
                     int obj_id = it->obj_id;
                     Object* obj = objects[obj_id];
@@ -318,6 +324,10 @@ vector<string> StorageController::generate_disk_actions() {
                         if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time) == dp[tokens_left - cost]) {
                             action_types[tokens_left - cost] = "r";  // 记录 Read 操作
                             pre_read_costs[tokens_left - cost] = cost;
+                            dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
+                            if (dp_pos[tokens_left - cost] > disk->capacity) {
+                                dp_pos[tokens_left - cost] = 1;
+                            }
                         }
                     }
                 } else {
@@ -327,6 +337,10 @@ vector<string> StorageController::generate_disk_actions() {
                         if (dp[tokens_left] + 0 == dp[tokens_left - cost]) {
                             action_types[tokens_left - cost] = "r";  // 无对象块时，依然记录 Read 操作
                             pre_read_costs[tokens_left - cost] = cost;
+                            dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
+                            if (dp_pos[tokens_left - cost] > disk->capacity) {
+                                dp_pos[tokens_left - cost] = 1;
+                            }
                         }
                     }
                 }
