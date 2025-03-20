@@ -236,8 +236,14 @@ void StorageController::process_read_request(int req_id, int obj_id) {
     obj_it->second->active_requests.insert(req);
 }
 
-float compute_score(Object *obj, int offset, int ts) {
-    return obj->get_score(offset, ts);   
+float compute_score(Object *obj, int offset, int ts, Disk *disk, const std::vector<int> visited) {
+    std::unordered_set<int> offsets;
+    for (int v: visited) {
+        if (disk->units[disk->head_pos + v].obj_id == obj->id) {
+            offsets.insert(disk->units[disk->head_pos + v].obj_offset);
+        }
+    }
+    return obj->get_score(offset, ts, offsets);   
 }
 
 vector<string> StorageController::generate_disk_actions() {
@@ -321,8 +327,9 @@ vector<string> StorageController::generate_disk_actions() {
                     Object* obj = objects[obj_id];
                     int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
                     if (tokens_left - cost >= 0) {
-                        dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
-                        if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time) == dp[tokens_left - cost]) {
+                        // TODO: DP STATUS
+                        dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time, disk, {}), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
+                        if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time, disk, {}) == dp[tokens_left - cost]) {
                             action_types[tokens_left - cost] = "r";  // 记录 Read 操作
                             pre_read_costs[tokens_left - cost] = cost;
                             dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;

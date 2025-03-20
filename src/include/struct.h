@@ -152,7 +152,7 @@ struct Object {
         replicas.push_back(std::move(rep));
     }
 
-    float get_score(int obj_offset, int time);
+    float get_score(int obj_offset, int time, const std::unordered_set<int> &offsets);
 };
 
 struct ReadRequest {
@@ -176,7 +176,7 @@ struct ReadRequest {
         expire_time = start_time + 105;
     }
 
-    float get_score(int obj_offset, int time) {
+    float get_score(int obj_offset, int time, const std::unordered_set<int> offsets) {
         if (block_read[obj_offset]) {
             return 0;
         } else {
@@ -189,7 +189,14 @@ struct ReadRequest {
             } else {
                 score = 0;
             }
-            return score / target->size * (target->size + 1);
+            int ubr = 0;
+            for (int i = 0; i <= block_read.size(); ++i) {
+                if (block_read[i] || offsets.find(i) != offsets.end()) {
+                    ubr += 1;
+                }
+            }
+            // 再调整
+            return score / target->size * (target->size + 1) * (1 + ubr / 2);
         }
         
     }
