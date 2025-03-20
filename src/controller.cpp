@@ -79,7 +79,7 @@ void StorageController::pre_process(){
             return a.second > b.second; // 按照第二个元素从大到小排序
         });
         // 感觉不能写死，TOPK 应该是动态变化的
-        int topk = topk_tag(0.95, hotness_to_sorted);
+        int topk = topk_tag(TOP_K_RATE, hotness_to_sorted);
         for(int i = 1; i <= topk; ++i){
             hot_tags_circular_que[t].push_back(hotness_to_sorted[i].first);
         }
@@ -87,8 +87,11 @@ void StorageController::pre_process(){
     }
     for (Disk* disk : disks){
         disk->hot_tags_record(hot_tags_circular_que);
-        //disk->pair_wise_partition_units(tags_size_sum);
-        disk->partition_units(tags_size_sum);
+        if(IS_PAIR_WISE_WRITE){
+            disk->pair_wise_partition_units(tags_size_sum);
+        } else {
+           disk->partition_units(tags_size_sum);
+        }
     }
     cout << "OK" << endl;
     cout.flush();
@@ -178,14 +181,17 @@ void StorageController::delete_action(){
 bool StorageController::write_object(int id, int size, int tag) {
     // 如果使用  id%(N*(N-1)) 的方式来选择正交拉丁表的元组，会出现disk号小先塞满的情况。
     // 这可能是由于没有考虑到size大小的问题
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, N*(N-1)); 
-    int random_number = dis(gen);
-    // int x = id%(N*(N-1))/N;
-    // int y = id%(N*(N-1))%N;
-    int x = random_number%(N*(N-1))/N;
-    int y = random_number%(N*(N-1))%N;
+    
+    int x = id%(N*(N-1))/N;
+    int y = id%(N*(N-1))%N;
+    if(IS_RANDOM_LATIN){
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, N*(N-1)); 
+        int random_number = dis(gen);
+        x = random_number%(N*(N-1))/N;
+        y = random_number%(N*(N-1))%N;
+    }
     int latin_assign_disk_ids[3] = {latin_templates[0][x][y],latin_templates[1][x][y],latin_templates[2][x][y]};
     vector<Disk*> candidates;
     candidates.reserve(disks.size());

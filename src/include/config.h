@@ -7,3 +7,9 @@
 #define FRE_PER_SLICING (1800)
 #define EXTRA_TIME (105)
 #define MAX_TOKENS_NUM (1000)
+
+
+// parameters
+#define TOP_K_RATE (0.95)
+#define IS_RANDOM_LATIN (1)
+#define IS_PAIR_WISE_WRITE (0)
