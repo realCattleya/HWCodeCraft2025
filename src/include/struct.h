@@ -10,6 +10,16 @@
 
 struct ReadRequest;
 
+struct SortItem {
+    int disk_id;
+    int current_size;
+
+    SortItem(int did) {
+        disk_id = did;
+        current_size = 0;
+    }
+};
+
 struct Unit {
     int unit_id;
     int obj_id;
@@ -58,7 +68,7 @@ struct Disk {
     }
 
     void pair_wise_partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
-        double buffer_rate = 0.05;
+        double buffer_rate = BUFF_RATE;
         std::sort(tags_size_sum.begin(), tags_size_sum.end(), 
         [](const std::pair<int, long long>& a, const std::pair<int, long long>& b) {
             return a.second > b.second; // 降序排序
@@ -85,7 +95,7 @@ struct Disk {
 
     // 考虑每轮大时间段开始时调整一下分区？无效
     void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
-        double buffer_rate = 0.05;
+        double buffer_rate = BUFF_RATE;
         long long total = 0;
         int idx = 0;
         int M = tags_size_sum.size();

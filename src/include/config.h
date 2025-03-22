@@ -15,3 +15,9 @@
 #define IS_PAIR_WISE_WRITE (1)
 #define WINDOW_SIZE (V/M)
 #define JUMP_TRIGGER (0)
+#define BUFF_RATE (0.05)
+
+// 跳转时机，当dp[0]==0时不受影响
+#define JUMP_START_TS (10000)
+#define JUMP_END_TS (T-10000)
+#define JUMP_THRES (G / 60)

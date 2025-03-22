@@ -29,6 +29,13 @@ fre_del(del), fre_write(write), fre_read(read) {
         }
         latin_templates.push_back(layer);
     }
+    for (int i = 0; i < M; ++i) {
+        std::vector<SortItem> dd;
+        for (int j = 0; j < N; ++j) {
+            dd.push_back(SortItem(j + 1));
+        }
+        disk_usage.push_back(dd);
+    }
 }
 
 
@@ -56,6 +63,8 @@ void StorageController::pre_process(){
     // 逐个时间段计算每个 tag 的热度
     vector<pair<int,long long>> tags_size_sum;
     for (int tag = 1; tag <= M; ++tag) {
+        int accum = 0;
+        std::vector<int> acc;
         for (int t = 0; t < time_intervals; ++t) {
             long long total_write = fre_write[tag - 1][t];
             long long total_read = fre_read[tag - 1][t];
@@ -66,8 +75,14 @@ void StorageController::pre_process(){
                 tags_size_sum.push_back(p);
                 continue;
             }
-            tags_size_sum[tag-1].second += fre_write[tag - 1][t]-fre_del[tag-1][t];
+            accum += fre_write[tag - 1][t]-fre_del[tag-1][t];
+            acc.push_back(accum);
         }
+        int sum = 0;
+        for (auto s: acc) {
+            sum += s;
+        }
+        tags_size_sum[tag-1].second = sum;
     }
     // 将每个时段的前TOPK热的tag存入循环队列中，让磁头循环扫盘
     for(int t = 0; t < time_intervals; ++t){
@@ -142,6 +157,10 @@ vector<int> StorageController::handle_delete(const vector<int>& obj_ids){
     for(int obj_id : obj_ids) {
         auto it = objects.find(obj_id);
         if(it == objects.end()) continue;
+        // 更新磁盘用量
+        for (const auto &rp: it->second->replicas) {
+            disk_usage[it->second->tag - 1][rp.disk_id - 1].current_size -= it->second->size;
+        }
         // 清除该对象在各盘中占用的单元
         for(auto& rep : it->second->replicas) {
             Disk* disk = disks[rep.disk_id-1];
@@ -183,51 +202,54 @@ bool StorageController::write_object(int id, int size, int tag) {
     // 如果使用  id%(N*(N-1)) 的方式来选择正交拉丁表的元组，会出现disk号小先塞满的情况。
     // 这可能是由于没有考虑到size大小的问题
     
-    int x = id%(N*(N-1))/N;
-    int y = id%(N*(N-1))%N;
-    if(IS_RANDOM_LATIN){
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, N*(N-1)); 
-        int random_number = dis(gen);
-        x = random_number%(N*(N-1))/N;
-        y = random_number%(N*(N-1))%N;
-    }
-    int latin_assign_disk_ids[3] = {latin_templates[0][x][y],latin_templates[1][x][y],latin_templates[2][x][y]};
-    vector<Disk*> candidates;
-    candidates.reserve(disks.size());
-    bool is_latin_layout = true;
-    for (auto d : disks) {
-        if (d->id == latin_templates[0][x][y] || 
-            d->id == latin_templates[1][x][y] || 
-            d->id == latin_templates[2][x][y]){
-            if (d->used_capcity + size <= V){
-                candidates.push_back(d);
-            }
-        }
-    }
-    if (candidates.size() < REP_NUM) 
-        is_latin_layout = false;
-    if(!is_latin_layout){
-        candidates.clear();
-        for (auto &d : disks) {
-            if (d->used_capcity + size <= V)
-                candidates.push_back(d);
-        }
-        // 按当前已用单元数量排序，选择空闲空间较多的磁盘
-        // sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
-        //     return a->used_capcity < b->used_capcity;
-        // });
-    }
-    if (candidates.size() < REP_NUM) {
-        cerr << "false!" << endl;
-        return false;
-    }
+    // int x = id%(N*(N-1))/N;
+    // int y = id%(N*(N-1))%N;
+    // if(IS_RANDOM_LATIN){
+    //     std::random_device rd;
+    //     std::mt19937 gen(rd());
+    //     std::uniform_int_distribution<> dis(0, N*(N-1)); 
+    //     int random_number = dis(gen);
+    //     x = random_number%(N*(N-1))/N;
+    //     y = random_number%(N*(N-1))%N;
+    // }
+    // int latin_assign_disk_ids[3] = {latin_templates[0][x][y],latin_templates[1][x][y],latin_templates[2][x][y]};
+    // vector<Disk*> candidates;
+    // candidates.reserve(disks.size());
+    // bool is_latin_layout = true;
+    // for (auto d : disks) {
+    //     if (d->id == latin_templates[0][x][y] || 
+    //         d->id == latin_templates[1][x][y] || 
+    //         d->id == latin_templates[2][x][y]){
+    //         if (d->used_capcity + size <= V){
+    //             candidates.push_back(d);
+    //         }
+    //     }
+    // }
+    // if (candidates.size() < REP_NUM) 
+    //     is_latin_layout = false;
+    // if(!is_latin_layout){
+    //     candidates.clear();
+    //     for (auto &d : disks) {
+    //         if (d->used_capcity + size <= V)
+    //             candidates.push_back(d);
+    //     }
+    //     // 按当前已用单元数量排序，选择空闲空间较多的磁盘
+    //     // sort(candidates.begin(), candidates.end(), [](Disk* a, Disk* b) {
+    //     //     return a->used_capcity < b->used_capcity;
+    //     // });
+    // }
+    // if (candidates.size() < REP_NUM) {
+    //     cerr << "false!" << endl;
+    //     return false;
+    // }
+    // vector<Disk*> candidates;
+    auto &du = disk_usage[tag - 1];
+    std::sort(du.begin(), du.end(), [](const SortItem &a, const SortItem &b)-> bool {return a.current_size < b.current_size;});
     auto obj = new Object(id,size,tag);
     // 为每个副本分配空间
     // TODO: 分区满后的写入仍有优化空间
     for (int i = 0; i < REP_NUM; ++i) {
-        Disk* target_disk = candidates[i];
+        Disk* target_disk = disks[du[i].disk_id - 1];
         std::vector<int> target_units;
         target_units = target_disk->next_free_unit(size,tag);
         sort(target_units.begin(),target_units.end());
@@ -236,6 +258,7 @@ bool StorageController::write_object(int id, int size, int tag) {
             target_disk->insert(target_units[j], id, j, tag);
         }
         target_disk->used_units_cnt += target_units.size();
+        du[i].current_size += size;
     }
 
     objects[id] = obj;
@@ -284,6 +307,46 @@ float compute_score(Object *obj, int offset, int ts) {
     return obj->get_score(offset, ts);   
 }
 
+int StorageController::find_hottest_position(Disk* disk) {
+    std::vector<float> score(disk->capacity + 1, 0);
+    float sss = 0;
+    for (int i = 1; i <= disk->capacity; ++i) {
+        if (disk->units[i].obj_id != -1) {
+            score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+        }
+    }
+    for (int i = 1; i <= WINDOW_SIZE; ++i) {
+        sss += score[i];
+    }
+    int max_pos = 1;
+    int max_score = sss;
+    for (int i = 1; i <= disk->capacity; ++i) {
+        sss -= score[i];
+        int nt = i + WINDOW_SIZE;
+        if (nt > disk->capacity) {
+            nt -= disk->capacity;
+        }
+        sss += score[nt];
+        if (sss >= max_score) {
+            max_pos = i + 1;
+            max_score = sss;
+        }
+    }
+
+    if (max_pos > disk->capacity) {
+        max_pos -= disk->capacity;
+    }
+    return max_pos;
+}
+
+void do_jump(int jump_target, Disk *disk, vector<string>& actions) {
+        std::string act_str = "j " + to_string(jump_target);
+        // 更新 head_pos 为 jump_target 后的下一个位置
+        disk->head_pos = jump_target;
+        disk->pre_tokens = 0;
+        actions.push_back(move(act_str));
+}
+
 vector<string> StorageController::generate_disk_actions() {
     vector<string> actions;
     actions.reserve(disks.size());
@@ -298,87 +361,87 @@ vector<string> StorageController::generate_disk_actions() {
         act_str.reserve(64); // 预估动作串长度，减少扩容
         
         // --- Jump 策略 ---
-        int jump_target = -1;
-        const int search_limit = G / 2; // 向前搜索上限
-        int steps = 0;
-        int pos = disk->head_pos;
-        int needed_cnt = 0;
-        while (steps <= G + 100) {
-            if (disk->units[pos].obj_id != -1) {
-                Unit &u = disk->units[pos];
-                auto obj_it = objects.find(u.obj_id);
-                if (obj_it != objects.end()) {
-                    bool needed = false;
-                    // 检查该对象是否有活跃请求且该块还未读取
-                    for (auto req : obj_it->second->active_requests) {
-                        if (!req->block_read[u.obj_offset]) {
-                            needed = true;
-                            break;
-                        }
-                    }
-                    if (needed) {
-                        needed_cnt++;
-                        //break;
-                    }
-                }
-            }
-            if(needed_cnt > JUMP_TRIGGER * G){
-                break;
-            }
-            pos++;
-            if (pos > disk->capacity) pos = 1;
-            steps++;
-        }
-        // 如果需要超过G/2步才读到 JUMP_TRIGGER * G个需要读取的Obj，则采用 Jump   
-        if (steps >= search_limit && tokens == G) {
-            //jump_target = pos;
-            // disk->curr_tag_to_read = disk->unique_hot_tags_circular_que[current_time_interval].front();
-            // disk->unique_hot_tags_circular_que[current_time_interval].pop_front();
-            // disk->unique_hot_tags_circular_que[current_time_interval].push_back(disk->curr_tag_to_read);
-            // jump_target = disk->tag_bounds[disk->curr_tag_to_read].lower;
-            // if(jump_target <=0 || jump_target > V) {
-            //     jump_target = 1;
-            // }
-            std::vector<float> score(disk->capacity + 1, 0);
-            float sss = 0;
-            for (int i = 1; i <= disk->capacity; ++i) {
-                if (disk->units[i].obj_id != -1) {
-                    score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
-                }
-            }
-            for (int i = 1; i <= WINDOW_SIZE; ++i) {
-                sss += score[i];
-            }
-            int max_pos = 1;
-            int max_score = sss;
-            for (int i = 1; i <= disk->capacity; ++i) {
-                sss -= score[i];
-                int nt = i + WINDOW_SIZE;
-                if (nt > disk->capacity) {
-                    nt -= disk->capacity;
-                }
-                sss += score[nt];
-                if (sss >= max_score) {
-                    max_pos = i + 1;
-                    max_score = sss;
-                }
-            }
+        // int jump_target = -1;
+        // const int search_limit = G / 2; // 向前搜索上限
+        // int steps = 0;
+        // int pos = disk->head_pos;
+        // int needed_cnt = 0;
+        // while (steps <= G + 100) {
+        //     if (disk->units[pos].obj_id != -1) {
+        //         Unit &u = disk->units[pos];
+        //         auto obj_it = objects.find(u.obj_id);
+        //         if (obj_it != objects.end()) {
+        //             bool needed = false;
+        //             // 检查该对象是否有活跃请求且该块还未读取
+        //             for (auto req : obj_it->second->active_requests) {
+        //                 if (!req->block_read[u.obj_offset]) {
+        //                     needed = true;
+        //                     break;
+        //                 }
+        //             }
+        //             if (needed) {
+        //                 needed_cnt++;
+        //                 //break;
+        //             }
+        //         }
+        //     }
+        //     if(needed_cnt > JUMP_TRIGGER * G){
+        //         break;
+        //     }
+        //     pos++;
+        //     if (pos > disk->capacity) pos = 1;
+        //     steps++;
+        // }
+        // // 如果需要超过G/2步才读到 JUMP_TRIGGER * G个需要读取的Obj，则采用 Jump   
+        // if (steps >= search_limit && tokens == G) {
+        //     //jump_target = pos;
+        //     // disk->curr_tag_to_read = disk->unique_hot_tags_circular_que[current_time_interval].front();
+        //     // disk->unique_hot_tags_circular_que[current_time_interval].pop_front();
+        //     // disk->unique_hot_tags_circular_que[current_time_interval].push_back(disk->curr_tag_to_read);
+        //     // jump_target = disk->tag_bounds[disk->curr_tag_to_read].lower;
+        //     // if(jump_target <=0 || jump_target > V) {
+        //     //     jump_target = 1;
+        //     // }
+        //     std::vector<float> score(disk->capacity + 1, 0);
+        //     float sss = 0;
+        //     for (int i = 1; i <= disk->capacity; ++i) {
+        //         if (disk->units[i].obj_id != -1) {
+        //             score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+        //         }
+        //     }
+        //     for (int i = 1; i <= WINDOW_SIZE; ++i) {
+        //         sss += score[i];
+        //     }
+        //     int max_pos = 1;
+        //     int max_score = sss;
+        //     for (int i = 1; i <= disk->capacity; ++i) {
+        //         sss -= score[i];
+        //         int nt = i + WINDOW_SIZE;
+        //         if (nt > disk->capacity) {
+        //             nt -= disk->capacity;
+        //         }
+        //         sss += score[nt];
+        //         if (sss >= max_score) {
+        //             max_pos = i + 1;
+        //             max_score = sss;
+        //         }
+        //     }
 
-            if (max_pos > disk->capacity) {
-                max_pos -= disk->capacity;
-            }
-            jump_target = max_pos;
-        }
-        // jump_target = pos;
-        if(jump_target != -1) {
-            act_str = "j " + to_string(jump_target);
-            tokens = 0; // Jump后本时间片内不再有动作
-            // 更新 head_pos 为 jump_target 后的下一个位置
-            disk->head_pos = jump_target;
-            disk->pre_tokens = 0;
-            actions.push_back(move(act_str));
-            continue;
-        }
+        //     if (max_pos > disk->capacity) {
+        //         max_pos -= disk->capacity;
+        //     }
+        //     jump_target = max_pos;
+        // }
+        // // jump_target = pos;
+        // if(jump_target != -1) {
+        //     act_str = "j " + to_string(jump_target);
+        //     tokens = 0; // Jump后本时间片内不再有动作
+        //     // 更新 head_pos 为 jump_target 后的下一个位置
+        //     disk->head_pos = jump_target;
+        //     disk->pre_tokens = 0;
+        //     actions.push_back(move(act_str));
+        //     continue;
+        // }
 
         // --- DP PR 策略 ---
         vector<double> dp(G + 1, -1e9); // 初始化 DP 数组，最大令牌数为 G，初始状态为负无穷
@@ -439,6 +502,13 @@ vector<string> StorageController::generate_disk_actions() {
             }
         }
 
+        // 跳转策略
+        if ((current_time >= JUMP_START_TS && current_time <= JUMP_END_TS && dp[0] < JUMP_THRES) || dp[0] == 0) {
+            int hottest_pos = find_hottest_position(disk);
+            do_jump(hottest_pos, disk, actions);
+            continue;
+        }
+
         // 选择最大得分，并反向回溯生成操作路径
         int tokens_left = 0;  // 从 0 令牌数开始回溯
 
@@ -471,8 +541,11 @@ vector<string> StorageController::generate_disk_actions() {
             }
         }
 
-        // 如果没有找到 Read 操作，则强制将最后一个操作设为 Read
+
+
+
         if (!found_read) {
+
             act_str = "r";
             temp_actions.push_back(act_str);
             last_read_cost = (disk->pre_tokens == 0) ? 64 : max(16, int(ceil(float(disk->pre_tokens) * 0.8) ));

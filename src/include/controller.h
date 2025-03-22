@@ -24,6 +24,9 @@ class StorageController {
         std::vector<std::vector<double>> tag_hotness; // tag_hotness[tag][time_interval]
         std::unordered_map<int,std::deque<int>> hot_tags_circular_que;
         std::vector<std::vector<std::vector<int>>> latin_templates;
+
+        // 每个TAG中每个磁盘当前存储量
+        std::vector<std::vector<SortItem>> disk_usage;
     
     public:
         StorageController(int T, int M, int N, int V, int G,
@@ -40,4 +43,7 @@ class StorageController {
         std::vector<std::string> generate_disk_actions(); 
         std::vector<int> check_completed_requests(); 
         void read_action();
+
+
+        int find_hottest_position(Disk *disk);
     };
