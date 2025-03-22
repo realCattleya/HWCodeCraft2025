@@ -24,8 +24,12 @@ class StorageController {
         std::vector<std::vector<double>> tag_hotness; // tag_hotness[tag][time_interval]
         std::unordered_map<int,std::deque<int>> hot_tags_circular_que;
         std::vector<std::vector<std::vector<int>>> latin_templates;
+
+        // 每个TAG中每个磁盘当前存储量
+        std::vector<std::vector<SortItem>> disk_usage;
     
     public:
+        int jump_cnt = 0;
         StorageController(int T, int M, int N, int V, int G,
             std::vector<std::vector<int>>& del,
             std::vector<std::vector<int>>& write,

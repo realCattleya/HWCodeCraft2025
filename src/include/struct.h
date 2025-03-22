@@ -10,6 +10,16 @@
 
 struct ReadRequest;
 
+struct SortItem {
+    int disk_id;
+    int current_size;
+
+    SortItem(int did) {
+        disk_id = did;
+        current_size = 0;
+    }
+};
+
 struct Unit {
     int unit_id;
     int obj_id;
@@ -72,20 +82,18 @@ struct Disk {
             total += tags_size_sum[idx].second + tags_size_sum[M-idx-1].second;
             tmp.push_back(total);
         }
-        // 前 buffer_rate 的空间作为缓存区
-        int last_bound = int(capacity*buffer_rate);
-        tag_bounds[0] = Bound(1,int(capacity*buffer_rate),false);
+        // 后 buffer_rate 的空间作为缓存区
+        int last_bound = 0;
         for(idx=0;idx<M/2;idx++){
-            int bound = int(double(tmp[idx])/double(total)*(1-buffer_rate)*double(capacity)+capacity*buffer_rate);
+            int bound = int(double(tmp[idx])/double(total)*(1-buffer_rate)*double(capacity));
             tag_bounds[tags_size_sum[idx].first] = Bound(last_bound+1,bound,false);
             tag_bounds[tags_size_sum[M-idx-1].first] = Bound(last_bound+1,bound,true);
             last_bound = bound;
         }
+        tag_bounds[0] = Bound(last_bound+1,capacity,false);
     }
 
-    // 考虑每轮大时间段开始时调整一下分区？无效
     void partition_units(std::vector<std::pair<int,long long>> tags_size_sum){
-        double buffer_rate = 0.05;
         long long total = 0;
         int idx = 0;
         int M = tags_size_sum.size();
@@ -94,14 +102,14 @@ struct Disk {
             total += tags_size_sum[idx].second;
             tmp.push_back(total);
         }
-        // 前 buffer_rate 的空间作为缓存区
-        int last_bound = int(capacity*buffer_rate);
-        tag_bounds[0] = Bound(1,int(capacity*buffer_rate),false);
+        // 后 buffer_rate 的空间作为缓存区
+        int last_bound = 0;
         for(idx=0;idx<M;idx++){
-            int bound = int(double(tmp[idx])/double(total)*(1-buffer_rate)*double(capacity)+capacity*buffer_rate);
+            int bound = int(double(tmp[idx])/double(total)*(1-BUFFER_RATE)*double(capacity));
             tag_bounds[tags_size_sum[idx].first] = Bound(last_bound+1,bound,false);
             last_bound = bound;
         }
+        tag_bounds[0] = Bound(last_bound+1,capacity,false);
         return;
     }
 
@@ -128,11 +136,13 @@ struct Disk {
         // 区间内没有足够的空位置,开始找位置塞，从缓存区开始找（unit_id=1）
         if(free_units.size() < size) {
             free_units.clear();
-            for(int unit_id = 1; unit_id <= capacity; ++unit_id){
+            int unit_id = tag_bounds[0].lower;
+            while(free_units.size() < size){
                 if(units[unit_id].obj_id == -1){
                     free_units.push_back(unit_id);
                 }
-                if(free_units.size() == size) break;
+                unit_id++;
+                if(unit_id > capacity) unit_id = 1;
             }
         }
         if(free_units.size() < size) {
