@@ -239,8 +239,8 @@ void StorageController::process_read_request(int req_id, int obj_id) {
 float compute_score(Object *obj, int offset, int ts, Disk *disk, const std::vector<int> visited) {
     std::unordered_set<int> offsets;
     for (int v: visited) {
-        if (disk->units[disk->head_pos + v].obj_id == obj->id) {
-            offsets.insert(disk->units[disk->head_pos + v].obj_offset);
+        if (disk->units[v].obj_id == obj->id) {
+            offsets.insert(disk->units[v].obj_offset);
         }
     }
     return obj->get_score(offset, ts, offsets);   
@@ -300,6 +300,7 @@ vector<string> StorageController::generate_disk_actions() {
         vector<string> action_types(G + 1, "");  // 用来存储每个令牌数的操作类型（Read/Pass）
         vector<int> pre_read_costs(G + 1, 0);  // 用来存储每个令牌数的 Read 操作消耗
         vector<int> dp_pos(G + 1, 0);  // 用来存储每个状态的磁头位置
+        vector<vector<int>> dp_read_pos(G + 1, vector<int>(G + 1, 0));  // 用来存储每个状态的 Read 操作的磁头位置
         dp[G] = 0; // 初始状态下，消耗 0 个令牌时的得分为 0
         int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;  // 上一个时间片的 `Read` 消耗
         pre_read_costs[G] = last_read_cost;  // 初始化最大令牌数的 Read 消耗
@@ -328,11 +329,13 @@ vector<string> StorageController::generate_disk_actions() {
                     int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
                     if (tokens_left - cost >= 0) {
                         // TODO: DP STATUS
-                        dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time, disk, {}), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
-                        if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time, disk, {}) == dp[tokens_left - cost]) {
+                        dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time, disk, dp_read_pos[tokens_left]), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
+                        if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time, disk, dp_read_pos[tokens_left]) == dp[tokens_left - cost]) {
                             action_types[tokens_left - cost] = "r";  // 记录 Read 操作
                             pre_read_costs[tokens_left - cost] = cost;
                             dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
+                            copy(dp_read_pos[tokens_left].begin(), dp_read_pos[tokens_left].end(), dp_read_pos[tokens_left - cost].begin());
+                            dp_read_pos[tokens_left - cost].push_back(dp_pos[tokens_left]);
                             if (dp_pos[tokens_left - cost] > disk->capacity) {
                                 dp_pos[tokens_left - cost] = 1;
                             }
