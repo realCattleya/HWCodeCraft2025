@@ -118,21 +118,83 @@ struct Disk {
     std::vector<int> next_free_unit(int size, int tag){
         std::vector<int> free_units;
         bool is_reverse = tag_bounds[tag].is_reverse;
+        // first pass
         if(is_reverse){
             for(int unit_id = tag_bounds[tag].upper; unit_id >= tag_bounds[tag].lower ; --unit_id){
                 // 找到空位置
-                if(units[unit_id].obj_id == -1){
-                    free_units.push_back(unit_id);
+                bool al = true;
+                for (int i = 0; i < size; ++i) {
+                    int uid = unit_id - i;
+                    if (uid < 1) {
+                        uid += capacity;
+                    }
+                    if(units[uid].obj_id != -1){
+                        al = false;
+                    }
                 }
-                if(free_units.size() == size) break;
+                
+                if(al) {
+                    for (int i = 0; i < size; ++i) {
+                        int uid = unit_id - i;
+                        if (uid < 1) {
+                            uid += capacity;
+                        }
+                        free_units.push_back(uid);
+                    }
+                    break;
+                } 
             }
         } else {
-            for(int unit_id = tag_bounds[tag].lower; unit_id <= tag_bounds[tag].upper ; ++unit_id){
+            for(int unit_id = tag_bounds[tag].lower; unit_id >= tag_bounds[tag].upper ; ++unit_id){
                 // 找到空位置
-                if(units[unit_id].obj_id == -1){
-                    free_units.push_back(unit_id);
+                bool al = true;
+                for (int i = 0; i < size; ++i) {
+                    int uid = unit_id + i;
+                    if (uid > capacity) {
+                        uid -= capacity;
+                    }
+                    if(units[uid].obj_id != -1){
+                        al = false;
+                    }
                 }
-                if(free_units.size() == size) break;
+                
+                if(al) {
+                    for (int i = 0; i < size; ++i) {
+                        int uid = unit_id + i;
+                        if (uid > capacity) {
+                            uid -= capacity;
+                        }
+                        free_units.push_back(uid);
+                    }
+                    break;
+                } 
+            }
+
+            // for(int unit_id = tag_bounds[tag].lower; unit_id <= tag_bounds[tag].upper ; ++unit_id){
+            //     // 找到空位置
+            //     if(units[unit_id].obj_id == -1){
+            //         free_units.push_back(unit_id);
+            //     }
+            //     if(free_units.size() == size) break;
+            // }
+        }
+        if (free_units.size() < size) {
+            if(is_reverse){
+                for(int unit_id = tag_bounds[tag].upper; unit_id >= tag_bounds[tag].lower ; --unit_id){
+                    // 找到空位置
+                    if(units[unit_id].obj_id == -1){
+                        free_units.push_back(unit_id);
+                    }
+                    if(free_units.size() == size) break;
+                }
+            } else {
+                for(int unit_id = tag_bounds[tag].lower; unit_id <= tag_bounds[tag].upper ; ++unit_id){
+                    // 找到空位置
+                    if(units[unit_id].obj_id == -1){
+                        free_units.push_back(unit_id);
+                    }
+                    if(free_units.size() == size) break;
+                }
             }
         }
         // 区间内没有足够的空位置,开始找位置塞，从缓存区开始找（unit_id=1）
