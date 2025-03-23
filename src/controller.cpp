@@ -312,7 +312,7 @@ int StorageController::find_hottest_position(Disk* disk) {
     float sss = 0;
     for (int i = 1; i <= disk->capacity; ++i) {
         if (disk->units[i].obj_id != -1) {
-            score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+            score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time + 1);
         }
     }
     for (int i = 1; i <= WINDOW_SIZE; ++i) {
