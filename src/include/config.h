@@ -18,6 +18,8 @@
 #define BUFF_RATE (0.05)
 
 // 跳转时机，当dp[0]==0时不受影响
-#define JUMP_START_TS (10000)
-#define JUMP_END_TS (T-10000)
+#define JUMP_START_TS (20000)
+#define JUMP_END_TS (T-20000)
 #define JUMP_THRES (G / 60)
+
+#define USE_PASS_PADDING true

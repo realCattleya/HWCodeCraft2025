@@ -450,6 +450,7 @@ vector<string> StorageController::generate_disk_actions() {
         vector<int> dp_pos(G + 1, 0);  // 用来存储每个状态的磁头位置
         dp[G] = 0; // 初始状态下，消耗 0 个令牌时的得分为 0
         int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;  // 上一个时间片的 `Read` 消耗
+        int last_read_cost2 = last_read_cost;
         pre_read_costs[G] = last_read_cost;  // 初始化最大令牌数的 Read 消耗
         dp_pos[G] = disk->head_pos;
 
@@ -516,7 +517,7 @@ vector<string> StorageController::generate_disk_actions() {
         vector<string> temp_actions;
         bool found_read = false;
 
-        while (tokens_left < G && action_types[tokens_left] != "") {
+        while (tokens_left <= G && action_types[tokens_left] != "") {
             if (action_types[tokens_left] == "r") {
                 // 记录 Read 操作
                 act_str = "r";
@@ -558,8 +559,11 @@ vector<string> StorageController::generate_disk_actions() {
         // actions.insert(actions.end(), temp_actions.begin(), temp_actions.end());
 
         // 检查完成的请求
+        int token_taken = 0;
         for (const auto &s: temp_actions) {
             if (s == "r") {
+                last_read_cost2 = (last_read_cost2 == 0) ? 64 : max(16, int(ceil(float(last_read_cost2) * 0.8) ));
+                token_taken += last_read_cost2;
                 Unit &u = disk->units[disk->head_pos];
                 if (u.obj_id != -1)
                 {
@@ -581,16 +585,47 @@ vector<string> StorageController::generate_disk_actions() {
                     }
                     
                 }
+            } else {
+                last_read_cost2 = 0;
+                token_taken += 1;
             }
             disk->head_pos += 1;
             if (disk->head_pos > disk->capacity) {
                 disk->head_pos = 1;
             }
         }
-        // disk->head_pos += temp_actions.size();
-        // if (disk->head_pos > disk->capacity) {
-        //     disk->head_pos = 1;
-        // }
+        if (USE_PASS_PADDING) {
+            int move_steps = 0;
+            while (token_taken < G)
+            {
+                int hp = disk->head_pos;
+                Unit &u = disk->units[hp];
+                token_taken += 1;
+                if (u.obj_id == -1 || objects[u.obj_id]->get_score(u.obj_offset, current_time + 1) == 0) {
+                    hp = hp + 1;
+                    move_steps += 1;
+                    if (hp > disk->capacity) hp = 1;
+                } else {
+                    break;
+                }
+            }
+            int thres;
+            if (disk->pre_tokens == 16) {
+                thres = 4;
+            } else {
+                thres = 3;
+            }
+            if (move_steps >= thres) {
+                for (int i = 0; i < move_steps; ++i) {
+                    temp_actions.push_back("p");
+                }
+                disk->head_pos += move_steps;
+                if (disk->head_pos > disk->capacity) {
+                    disk->head_pos -= disk->capacity;
+                }
+                disk->pre_tokens = 0;
+            }
+        }
 
         temp_actions.push_back("#");
         // FIXME: 检查一下输出这里
