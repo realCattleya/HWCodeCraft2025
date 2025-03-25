@@ -16,6 +16,6 @@
 #define IS_PERMUTATION (1)
 #define IS_TAG_SORT (0)
 #define IS_PAIR_WISE_WRITE (1)
-#define WINDOW_SIZE (V/M)
+#define WINDOW_SIZE (V/M/2)
 #define JUMP_TRIGGER (0)
 #define BUFFER_RATE (0.0)
