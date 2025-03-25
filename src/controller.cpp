@@ -6,6 +6,8 @@
 #include <random>
 using namespace std;
 
+const static double EPSILON = 0;
+
 StorageController::StorageController(int T, int M, int N, int V, int G,
     vector<vector<int>>& del,
     vector<vector<int>>& write,
@@ -366,66 +368,102 @@ vector<string> StorageController::generate_disk_actions() {
         }
 
         // --- DP PR 策略 ---
-        vector<double> dp(G + 1, -1e9); // 初始化 DP 数组，最大令牌数为 G，初始状态为负无穷
-        vector<string> action_types(G + 1, "");  // 用来存储每个令牌数的操作类型（Read/Pass）
-        vector<int> pre_read_costs(G + 1, 0);  // 用来存储每个令牌数的 Read 操作消耗
-        vector<int> dp_pos(G + 1, 0);  // 用来存储每个状态的磁头位置
-        dp[G] = 0; // 初始状态下，消耗 0 个令牌时的得分为 0
-        int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;  // 上一个时间片的 `Read` 消耗
-        pre_read_costs[G] = last_read_cost;  // 初始化最大令牌数的 Read 消耗
-        dp_pos[G] = disk->head_pos;
+        // vector<double> dp(G + 1, -1e9); // 初始化 DP 数组，最大令牌数为 G，初始状态为负无穷
+        // vector<string> action_types(G + 1, "");  // 用来存储每个令牌数的操作类型（Read/Pass）
+        // vector<int> pre_read_costs(G + 1, 0);  // 用来存储每个令牌数的 Read 操作消耗
+        // vector<int> dp_pos(G + 1, 0);  // 用来存储每个状态的磁头位置
+        // dp[G] = 0; // 初始状态下，消耗 0 个令牌时的得分为 0
+        // int last_read_cost = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;  // 上一个时间片的 `Read` 消耗
+        // pre_read_costs[G] = last_read_cost;  // 初始化最大令牌数的 Read 消耗
+        // dp_pos[G] = disk->head_pos;
 
-        // 状态转移：遍历每个令牌数 tokens_left
-        for (int tokens_left = G; tokens_left > 0; tokens_left--) {  // 从 G 到 0 反向更新 DP
-            // Pass 操作（不增加得分，只消耗 1 个令牌）
-            if (tokens_left > 0 && dp[tokens_left] != -1e9) {
-                dp[tokens_left - 1] = max(dp[tokens_left] + 0, dp[tokens_left - 1]);
-                if (dp[tokens_left] + 0 == dp[tokens_left - 1]) {
-                    action_types[tokens_left - 1] = "p";  // 记录 Pass 操作
-                    pre_read_costs[tokens_left - 1] = 0;
-                    dp_pos[tokens_left - 1] = dp_pos[tokens_left] + 1;
-                    if (dp_pos[tokens_left - 1] > disk->capacity) {
-                        dp_pos[tokens_left - 1] = 1;
+        // // 状态转移：遍历每个令牌数 tokens_left
+        // for (int tokens_left = G; tokens_left > 0; tokens_left--) {  // 从 G 到 0 反向更新 DP
+        //     // Pass 操作（不增加得分，只消耗 1 个令牌）
+        //     if (tokens_left > 0 && dp[tokens_left] != -1e9) {
+        //         dp[tokens_left - 1] = max(dp[tokens_left] + EPSILON, dp[tokens_left - 1]);
+        //         if (dp[tokens_left] + EPSILON == dp[tokens_left - 1]) {
+        //             action_types[tokens_left - 1] = "p";  // 记录 Pass 操作
+        //             pre_read_costs[tokens_left - 1] = 0;
+        //             dp_pos[tokens_left - 1] = dp_pos[tokens_left] + 1;
+        //             if (dp_pos[tokens_left - 1] > disk->capacity) {
+        //                 dp_pos[tokens_left - 1] = 1;
+        //             }
+        //         }
+        //     }
+        //     // Read 操作（如果当前位置有对象块，计算得分）
+        //     if (tokens_left >= pre_read_costs[tokens_left] && dp[tokens_left] != -1e9) {
+        //         Unit *it = disk->units + dp_pos[tokens_left];
+        //         if (it->obj_id != -1) {
+        //             int obj_id = it->obj_id;
+        //             Object* obj = objects[obj_id];
+        //             int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+        //             if (tokens_left - cost >= 0) {
+        //                 dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
+        //                 if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time) == dp[tokens_left - cost]) {
+        //                     action_types[tokens_left - cost] = "r";  // 记录 Read 操作
+        //                     pre_read_costs[tokens_left - cost] = cost;
+        //                     dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
+        //                     if (dp_pos[tokens_left - cost] > disk->capacity) {
+        //                         dp_pos[tokens_left - cost] = 1;
+        //                     }
+        //                 }
+        //             }
+        //         } else {
+        //             int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+        //             if (tokens_left - cost >= 0) {
+        //                 dp[tokens_left - cost] = max(dp[tokens_left] + EPSILON, dp[tokens_left - cost]);
+        //                 if (dp[tokens_left] + EPSILON == dp[tokens_left - cost]) {
+        //                     action_types[tokens_left - cost] = "r";  // 无对象块时，依然记录 Read 操作
+        //                     pre_read_costs[tokens_left - cost] = cost;
+        //                     dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
+        //                     if (dp_pos[tokens_left - cost] > disk->capacity) {
+        //                         dp_pos[tokens_left - cost] = 1;
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+        double score = 0;
+        int last_read_cost2 = (disk->pre_tokens > 0) ? disk->pre_tokens : 0;
+        int token_left = G;
+        int disk_pos2 = disk->head_pos;
+        string action_list2;
+        while (token_left > 0)
+        {
+            if (disk->units[disk_pos2].obj_id != -1) {
+                double sc = objects[disk->units[disk_pos2].obj_id]->get_score(disk->units[disk_pos2].obj_offset, current_time);
+                if (sc != 0) {
+                    // 检查有没有token
+                    int this_time = (last_read_cost2 == 0) ? 64 : max(16, int(ceil(float(last_read_cost2) * 0.8) ));
+                    if (token_left < this_time) {
+                        break;
                     }
-                }
-            }
-            // Read 操作（如果当前位置有对象块，计算得分）
-            if (tokens_left >= pre_read_costs[tokens_left] && dp[tokens_left] != -1e9) {
-                Unit *it = disk->units + dp_pos[tokens_left];
-                if (it->obj_id != -1) {
-                    int obj_id = it->obj_id;
-                    Object* obj = objects[obj_id];
-                    int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
-                    if (tokens_left - cost >= 0) {
-                        dp[tokens_left - cost] = max(dp[tokens_left] + compute_score(obj, it->obj_offset, current_time), dp[tokens_left - cost]); //FIXME: compute_score非常耗费资源，此处强制要求拷贝，以防影响原有的信息维护
-                        if (dp[tokens_left] + compute_score(obj, it->obj_offset, current_time) == dp[tokens_left - cost]) {
-                            action_types[tokens_left - cost] = "r";  // 记录 Read 操作
-                            pre_read_costs[tokens_left - cost] = cost;
-                            dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
-                            if (dp_pos[tokens_left - cost] > disk->capacity) {
-                                dp_pos[tokens_left - cost] = 1;
-                            }
-                        }
-                    }
+                    score += sc;
+                    token_left -= this_time;
+                    action_list2.push_back('r');
+                    last_read_cost2 = this_time;
                 } else {
-                    int cost = (pre_read_costs[tokens_left] == 0) ? 64 : max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
-                    if (tokens_left - cost >= 0) {
-                        dp[tokens_left - cost] = max(dp[tokens_left] + 0, dp[tokens_left - cost]);
-                        if (dp[tokens_left] + 0 == dp[tokens_left - cost]) {
-                            action_types[tokens_left - cost] = "r";  // 无对象块时，依然记录 Read 操作
-                            pre_read_costs[tokens_left - cost] = cost;
-                            dp_pos[tokens_left - cost] = dp_pos[tokens_left] + 1;
-                            if (dp_pos[tokens_left - cost] > disk->capacity) {
-                                dp_pos[tokens_left - cost] = 1;
-                            }
-                        }
-                    }
+                    action_list2.push_back('p');
+                    token_left -= 1;
+                    last_read_cost2 = 0;
                 }
+            } else {
+                action_list2.push_back('p');
+                token_left -= 1;
+                last_read_cost2 = 0;
+            }
+            disk_pos2 += 1;
+            if (disk_pos2 > disk->capacity) {
+                disk_pos2 = 1;
             }
         }
 
+        
+
         // 如果需要超过G/4/M 步才读到 JUMP_TRIGGER * G个需要读取的Obj，则采用 Jump   
-        if (steps >= search_limit || dp[0] < G/(5*M)) {
+        if (steps >= search_limit || score < G/(5*M)) {
             //jump_target = pos;
             // disk->curr_tag_to_read = disk->unique_hot_tags_circular_que[current_time_interval].front();
             // disk->unique_hot_tags_circular_que[current_time_interval].pop_front();
@@ -435,12 +473,57 @@ vector<string> StorageController::generate_disk_actions() {
             //     jump_target = 1;
             // }
             std::vector<float> score(disk->capacity + 1, 0);
+            vector<pair<int,double>> hotness_to_sorted;
             float sss = 0;
+            // if (current_time < 20000) {
+            //     for(int tag = 1; tag <= M; ++tag){
+            //         hotness_to_sorted.push_back(make_pair(tag,tag_hotness[tag][current_time_interval]));
+            //     }
+            //     sort(hotness_to_sorted.begin(), hotness_to_sorted.end(), [](const pair<int, double>& a, const pair<int, double>& b) {
+            //         return a.second > b.second; // 按照第二个元素从大到小排序
+            //     });
+            //     for (int i = 1; i <= disk->capacity; ++i) {
+            //         for (int j = 0; j < 6; ++j) {
+            //             const Bound &b = disk->tag_bounds[hotness_to_sorted[j].first];
+            //             if (b.lower <= i && i <= b.upper) {
+            //                 if (disk->units[i].obj_id != -1) {
+            //                     score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+            //                 }
+            //                 break;
+            //             }
+            //         }
+                    
+            //     }
+            // } else {
+            //     for (int i = 1; i <= disk->capacity; ++i) {
+            //         if (disk->units[i].obj_id != -1) {
+            //             score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+            //         }
+                    
+            //     }
+            // }
+
             for (int i = 1; i <= disk->capacity; ++i) {
                 if (disk->units[i].obj_id != -1) {
                     score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
                 }
+                
             }
+
+            
+            
+            // for (int i = 1; i <= disk->capacity; ++i) {
+            //     for (int j = 0; j < 6; ++j) {
+            //         const Bound &b = disk->tag_bounds[hotness_to_sorted[j].first];
+            //         if (b.lower <= i && i <= b.upper) {
+            //             if (disk->units[i].obj_id != -1) {
+            //                 score[i] = objects.find(disk->units[i].obj_id)->second->get_score(disk->units[i].obj_offset, current_time);
+            //             }
+            //             break;
+            //         }
+            //     }
+                
+            // }
             for (int i = 1; i <= WINDOW_SIZE; ++i) {
                 sss += score[i];
             }
@@ -453,15 +536,29 @@ vector<string> StorageController::generate_disk_actions() {
                     nt -= disk->capacity;
                 }
                 sss += score[nt];
-                if (sss >= max_score) {
+                if (sss > max_score) {
                     max_pos = i + 1;
                     max_score = sss;
                 }
             }
 
+
             if (max_pos > disk->capacity) {
                 max_pos -= disk->capacity;
             }
+
+            // int max_pos2 = max_pos;
+            // max_score = score[max_pos];
+            // for (int i = 1; i <= WINDOW_SIZE; ++i) {
+            //     if (score[max_pos] > max_score) {
+            //         max_score = score[i];
+            //         max_pos2 = max_pos;
+            //     }
+            //     max_pos += 1;
+            //     if (max_pos > disk->capacity) {
+            //         max_pos = 1;
+            //     }
+            // }
             jump_target = max_pos;
         }
         // jump_target = pos;
@@ -483,47 +580,47 @@ vector<string> StorageController::generate_disk_actions() {
         vector<string> temp_actions;
         bool found_read = false;
 
-        while (tokens_left < G && action_types[tokens_left] != "") {
-            if (action_types[tokens_left] == "r") {
-                // 记录 Read 操作
-                act_str = "r";
-                temp_actions.push_back(act_str);
-                if (!found_read){
-                    disk->pre_tokens = (pre_read_costs[tokens_left] == 0) ? 64 : pre_read_costs[tokens_left]; // max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
-                }
-                found_read = true;  // 标记找到第一个 Read
-            } else if (action_types[tokens_left] == "p") {
-                // 记录 Pass 操作
-                act_str = "p";
-                if (found_read) {
-                    temp_actions.push_back(act_str);
-                }
-            }
+        // while (tokens_left < G && action_types[tokens_left] != "") {
+        //     if (action_types[tokens_left] == "r") {
+        //         // 记录 Read 操作
+        //         act_str = "r";
+        //         temp_actions.push_back(act_str);
+        //         if (!found_read){
+        //             disk->pre_tokens = (pre_read_costs[tokens_left] == 0) ? 64 : pre_read_costs[tokens_left]; // max(16, int(ceil(float(pre_read_costs[tokens_left]) * 0.8) ));
+        //         }
+        //         found_read = true;  // 标记找到第一个 Read
+        //     } else if (action_types[tokens_left] == "p") {
+        //         // 记录 Pass 操作
+        //         act_str = "p";
+        //         if (found_read) {
+        //             temp_actions.push_back(act_str);
+        //         }
+        //     }
 
-            if (action_types[tokens_left] == "r") {
-                last_read_cost = pre_read_costs[tokens_left];  // 记录最后一个 Read 消耗
-                tokens_left += last_read_cost;  // 减少令牌消耗
-            } else if (action_types[tokens_left] == "p") {
-                tokens_left += 1;  // Pass 操作消耗 1 个令牌
-            }
-        }
+        //     if (action_types[tokens_left] == "r") {
+        //         last_read_cost = pre_read_costs[tokens_left];  // 记录最后一个 Read 消耗
+        //         tokens_left += last_read_cost;  // 减少令牌消耗
+        //     } else if (action_types[tokens_left] == "p") {
+        //         tokens_left += 1;  // Pass 操作消耗 1 个令牌
+        //     }
+        // }
 
         // 如果没有找到 Read 操作，则强制将最后一个操作设为 Read
-        if (!found_read) {
-            act_str = "r";
-            temp_actions.push_back(act_str);
-            last_read_cost = (disk->pre_tokens == 0) ? 64 : max(16, int(ceil(float(disk->pre_tokens) * 0.8) ));
-            disk->pre_tokens = last_read_cost;
-        }
+        // if (!found_read) {
+        //     act_str = "r";
+        //     temp_actions.push_back(act_str);
+        //     last_read_cost = (disk->pre_tokens == 0) ? 64 : max(16, int(ceil(float(disk->pre_tokens) * 0.8) ));
+        //     disk->pre_tokens = last_read_cost;
+        // }
 
         // 反转操作路径以保证顺序
-        reverse(temp_actions.begin(), temp_actions.end());
+        // reverse(temp_actions.begin(), temp_actions.end());
         
         // actions.insert(actions.end(), temp_actions.begin(), temp_actions.end());
 
         // 检查完成的请求
-        for (const auto &s: temp_actions) {
-            if (s == "r") {
+        for (const auto &s: action_list2) {
+            if (s == 'r') {
                 Unit &u = disk->units[disk->head_pos];
                 if (u.obj_id != -1)
                 {
@@ -556,13 +653,15 @@ vector<string> StorageController::generate_disk_actions() {
         //     disk->head_pos = 1;
         // }
 
-        temp_actions.push_back("#");
-        // FIXME: 检查一下输出这里
-        std::string act = "";
-        for (const auto& s: temp_actions) {
-            act += s;
-        }
-        actions.push_back(move(act));
+        // temp_actions.push_back("#");
+        // // FIXME: 检查一下输出这里
+        // std::string act = "";
+        // for (const auto& s: temp_actions) {
+        //     act += s;
+        // }
+        disk->pre_tokens = last_read_cost2;
+        action_list2.push_back('#');
+        actions.push_back(move(action_list2));
     }
     return actions;
 }   
